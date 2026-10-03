@@ -749,8 +749,14 @@ def render_review_section(state: SOVState):
 
     st.markdown("<div style='height: 14px;'></div>", unsafe_allow_html=True)
 
-    # Action Bar: Approval & Transformation Controls
-    col_actions, col_apply = st.columns([1, 1])
+    # Calculate mapping accuracy: predicted_columns_approved / total columns predicted * 100
+    col_mapping_recs = [r for r in recs if r.action_type == ActionType.COLUMN_MAPPING]
+    total_cols_predicted = len(col_mapping_recs)
+    predicted_cols_approved = len([r for r in col_mapping_recs if r.status == RecommendationStatus.APPROVED])
+    accuracy_pct = (predicted_cols_approved / total_cols_predicted * 100.0) if total_cols_predicted > 0 else 0.0
+
+    # Action Bar: Approval & Transformation Controls + Accuracy KPI
+    col_actions, col_accuracy, col_apply = st.columns([1.3, 0.9, 1.2])
 
     high_conf_pending = [r for r in pending if r.confidence >= config.HIGH_CONFIDENCE_THRESHOLD]
 
@@ -783,6 +789,18 @@ def render_review_section(state: SOVState):
                 )
             else:
                 st.button(f"All High-Confidence Approved ({len(approved)} Approved)", disabled=True, key="approve_high_locked")
+
+    with col_accuracy:
+        st.markdown(
+            f"""
+            <div style="background:#FFFFFF;border:1px solid #E5E7EB;border-radius:8px;padding:6px 12px;text-align:center;box-shadow:0 1px 2px rgba(0,0,0,0.02);min-height:54px;display:flex;flex-direction:column;justify-content:center;">
+                <div style="font-size:11px;font-weight:600;color:#6B7280;text-transform:uppercase;letter-spacing:0.04em;">Mapping Accuracy</div>
+                <div style="font-size:18px;font-weight:700;color:#0071E3;line-height:1.2;">{accuracy_pct:.1f}%</div>
+                <div style="font-size:10.5px;color:#9CA3AF;">{predicted_cols_approved} of {total_cols_predicted} approved</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
     with col_apply:
         if still_pending_required:
@@ -928,7 +946,8 @@ def _render_recommendation_card(state: SOVState, rec: Recommendation):
 
         with col_rej:
             if st.button("Reject", key=f"rej_{rec.id}"):
-                st.session_state[f"show_reject_{rec.id}"] = not st.session_state.get(f"show_reject_{rec.id}", False)
+                _reject_recommendation(state, rec.id, note="")
+                st.session_state.sov_state = state
                 st.rerun()
 
         with col_edit:
@@ -952,7 +971,8 @@ def _render_recommendation_card(state: SOVState, rec: Recommendation):
                 st.session_state.sov_state = state
                 st.rerun()
         with col_rej:
-            st.markdown(f"<span style='font-size:12px;color:#B91C1C;'>Rejected{': ' + rec.rejection_note if rec.rejection_note else ''}</span>", unsafe_allow_html=True)
+            rej_label = "Rejected (Column will be dropped)" if rec.action_type == ActionType.COLUMN_MAPPING else "Rejected"
+            st.markdown(f"<span style='font-size:12px;color:#B91C1C;font-weight:500;'>{rej_label}</span>", unsafe_allow_html=True)
 
     elif rec.status == RecommendationStatus.ESCALATED:
         with col_appr:
@@ -963,31 +983,15 @@ def _render_recommendation_card(state: SOVState, rec: Recommendation):
                     st.session_state[f"show_edit_{rec.id}"] = not st.session_state.get(f"show_edit_{rec.id}", False)
                     st.rerun()
 
-    # Expandable rejection note
-    if st.session_state.get(f"show_reject_{rec.id}"):
-        st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
-        rej_note = st.text_input("Reason for rejection (optional feedback for agent re-reasoning)", key=f"rnote_{rec.id}")
-        cr1, cr2, _ = st.columns([1, 1, 3])
-        with cr1:
-            if st.button("Confirm Reject", key=f"conf_rej_{rec.id}"):
-                _reject_recommendation(state, rec.id, rej_note)
-                st.session_state[f"show_reject_{rec.id}"] = False
-                st.session_state.sov_state = state
-                st.rerun()
-        with cr2:
-            if st.button("Cancel", key=f"canc_rej_{rec.id}"):
-                st.session_state[f"show_reject_{rec.id}"] = False
-                st.rerun()
-
-    # Expandable edit target field
+    # Expandable edit target field (saves as human feedback to ChromaDB)
     if st.session_state.get(f"show_edit_{rec.id}"):
         st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
         current_target = rec.target_column if rec.target_column in TARGET_FIELDS else TARGET_FIELDS[0]
         target_idx = TARGET_FIELDS.index(current_target) if current_target in TARGET_FIELDS else 0
-        new_target = st.selectbox("Assign to Standard Field", TARGET_FIELDS, index=target_idx, key=f"sel_target_{rec.id}")
-        ce1, ce2, _ = st.columns([1, 1, 3])
+        new_target = st.selectbox("Assign to Standard Field (Stores as feedback in ChromaDB)", TARGET_FIELDS, index=target_idx, key=f"sel_target_{rec.id}")
+        ce1, ce2, _ = st.columns([1.2, 1, 3])
         with ce1:
-            if st.button("Save & Approve", key=f"save_edit_{rec.id}"):
+            if st.button("Save & Assign Target", key=f"save_edit_{rec.id}"):
                 _edit_and_approve_recommendation(state, rec.id, new_target)
                 st.session_state[f"show_edit_{rec.id}"] = False
                 st.session_state.sov_state = state
@@ -1053,10 +1057,18 @@ def _edit_and_approve_recommendation(state: SOVState, rec_id: str, new_target: s
                 update={
                     "target_column": new_target,
                     "status": RecommendationStatus.APPROVED,
-                    "uncertainty": "User edited target mapping.",
+                    "uncertainty": "User manually assigned target (saved as human feedback).",
                     "confidence": 1.0,
                 }
             )
+            # Sync internal state.mappings if available
+            if state.mappings and getattr(state.mappings, "mappings", None):
+                for m in state.mappings.mappings:
+                    if m.source_column == rec.source_column:
+                        m.target = new_target
+                        m.confidence = 1.0
+                        m.rationale = f"Manually assigned by reviewer to '{new_target}' (feedback)."
+                        break
             if rec.action_type == ActionType.COLUMN_MAPPING:
                 try:
                     from app.services.memory.chroma_store import store_approved_mapping
@@ -1064,7 +1076,7 @@ def _edit_and_approve_recommendation(state: SOVState, rec_id: str, new_target: s
                         source_column=rec.source_column,
                         target_field=new_target,
                         confidence=1.0,
-                        method="human_edited",
+                        method="human_feedback",
                     )
                 except Exception as e:
                     logger.warning("Memory store error: %s", e)

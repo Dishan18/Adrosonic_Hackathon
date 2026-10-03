@@ -124,6 +124,29 @@ def _apply_approved_transformations(
         df = rename_and_coalesce(df, pairs)
         logger.info("Mapped columns: %s", pairs)
 
+    # Explicitly drop any source column whose mapping recommendation was rejected by the reviewer
+    if state and getattr(state, "recommendations", None):
+        for rec in state.recommendations:
+            if rec.action_type == ActionType.COLUMN_MAPPING and rec.status == RecommendationStatus.REJECTED:
+                src_col = rec.source_column
+                dropped = False
+                for c_name in [src_col, f"_unmapped_{src_col}"]:
+                    if c_name in df.columns:
+                        df = df.drop(columns=[c_name])
+                        dropped = True
+                if dropped:
+                    logger.info("Rejected column '%s' — dropped from output.", src_col)
+                    audit_entries.append(create_audit_entry(
+                        source_column=src_col,
+                        target_column="",
+                        transformation_applied="column_rejected_dropped",
+                        before_value=f"Column '{src_col}'",
+                        after_value="Dropped (rejected by reviewer)",
+                        confidence=1.0,
+                        approved_by="human",
+                        recommendation_id=None,
+                    ))
+
     # Step 2: Apply data transformations (STANDARDISATION / DATA_CORRECTION)
     for rec in approved_recs:
         if rec.action_type in (ActionType.STANDARDISATION, ActionType.DATA_CORRECTION):
