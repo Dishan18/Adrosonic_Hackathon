@@ -1,23 +1,23 @@
 """
 Agentic SOV Intelligence System — Minimalist Enterprise UI
-Clean, Apple-inspired minimal interface for SOV data cleansing, mapping, and audit.
+Clean, Apple-inspired interface with calm typography, human-readable review descriptions,
+and smooth, flicker-free interactions.
 """
 
 from __future__ import annotations
 
-import io
 import logging
 import os
 import sys
 import tempfile
 import uuid
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 
 import pandas as pd
 import streamlit as st
 
-# Make app importable from root
+# Make app importable from workspace root
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from app.schemas.state_models import (
@@ -28,7 +28,6 @@ from app.schemas.state_models import (
     WorkflowStage,
 )
 from app.schemas.target_schema import TARGET_FIELDS
-from app.processing.transformations import WHITELISTED_OPERATIONS
 from app.orchestration.state import create_initial_state
 from app.config import config
 
@@ -47,270 +46,243 @@ st.set_page_config(
 
 APPLE_CSS = """
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-
-html, body, [class*="css"] {
+/* 1. Global Reset & Universal Light Palette */
+html, body, [class*="css"], .stApp, [data-testid="stAppViewContainer"], .main {
     font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Inter", "Segoe UI", Roboto, sans-serif !important;
-    color: #1d1d1f;
-    background-color: #fbfbfd;
+    color: #1A1A1A !important;
+    background-color: #F8F9FA !important;
 }
 
-/* Hide default streamlit decor */
+/* 2. Hide Streamlit Decor */
 header[data-testid="stHeader"] {
-    background: transparent !important;
+    background-color: #F8F9FA !important;
 }
-footer {
-    display: none !important;
-}
-#MainMenu {
-    display: none !important;
-}
-.stDeployButton {
-    display: none !important;
-}
-[data-testid="stToolbar"] {
-    display: none !important;
-}
-[data-testid="stDecoration"] {
+footer, #MainMenu, .stDeployButton, [data-testid="stToolbar"], [data-testid="stDecoration"] {
     display: none !important;
 }
 
-/* Page container */
+/* 3. Centered Layout Container */
 .main .block-container {
-    max-width: 1080px;
-    padding-top: 2rem;
-    padding-bottom: 4rem;
+    max-width: 1040px !important;
+    padding-top: 1.8rem !important;
+    padding-bottom: 4rem !important;
+    background-color: #F8F9FA !important;
 }
 
-/* Header typography */
-.header-container {
-    margin-bottom: 24px;
+/* 4. Minimal Header */
+.header-box {
+    margin-bottom: 20px;
 }
-.header-title {
-    font-size: 26px;
-    font-weight: 600;
-    letter-spacing: -0.025em;
-    color: #1d1d1f;
-    margin: 0 0 4px 0;
+.header-box h1 {
+    font-size: 25px !important;
+    font-weight: 600 !important;
+    letter-spacing: -0.02em !important;
+    color: #111827 !important;
+    margin: 0 0 4px 0 !important;
 }
-.header-subtitle {
-    font-size: 14px;
-    font-weight: 400;
-    color: #86868b;
-    margin: 0;
-    line-height: 1.4;
+.header-box p {
+    font-size: 14px !important;
+    color: #6B7280 !important;
+    margin: 0 !important;
+    line-height: 1.4 !important;
 }
 
-/* Horizontal Step Indicator */
+/* 5. Stepper Bar */
 .stepper-wrap {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    background: #ffffff;
-    border: 1px solid #e5e5ea;
-    border-radius: 12px;
-    padding: 12px 24px;
-    margin-bottom: 24px;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02);
+    background: #FFFFFF !important;
+    border: 1px solid #E5E7EB !important;
+    border-radius: 10px !important;
+    padding: 12px 20px !important;
+    margin-bottom: 20px !important;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02) !important;
 }
 .stepper-item {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 7px;
     font-size: 13px;
     font-weight: 500;
-    color: #86868b;
+    color: #6B7280;
 }
 .stepper-item.active {
-    color: #1d1d1f;
+    color: #111827;
     font-weight: 600;
 }
 .stepper-item.completed {
-    color: #1d1d1f;
+    color: #111827;
 }
 .stepper-point {
-    width: 8px;
-    height: 8px;
+    width: 7px;
+    height: 7px;
     border-radius: 50%;
-    background: #d2d2d7;
+    background: #D1D5DB;
 }
 .stepper-item.active .stepper-point {
-    background: #0071e3;
+    background: #0071E3;
     box-shadow: 0 0 0 3px rgba(0, 113, 227, 0.15);
 }
 .stepper-item.completed .stepper-point {
-    background: #34c759;
+    background: #10B981;
 }
 .stepper-line {
     flex: 1;
     height: 1px;
-    background: #e5e5ea;
-    margin: 0 16px;
+    background: #E5E7EB;
+    margin: 0 14px;
 }
 
-/* Minimal Surface Cards */
+/* 6. Cards & Containers */
 .surface-card {
-    background: #ffffff;
-    border: 1px solid #e5e5ea;
-    border-radius: 12px;
-    padding: 18px 22px;
-    margin-bottom: 16px;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02);
+    background: #FFFFFF !important;
+    border: 1px solid #E5E7EB !important;
+    border-radius: 10px !important;
+    padding: 18px 20px !important;
+    margin-bottom: 12px !important;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02) !important;
 }
-.surface-title {
-    font-size: 14px;
-    font-weight: 600;
-    color: #1d1d1f;
-    margin-bottom: 4px;
-}
-.surface-desc {
-    font-size: 12px;
-    color: #86868b;
-    margin-bottom: 12px;
+.surface-card:hover {
+    border-color: #D1D5DB !important;
 }
 
-/* Metric Pill */
+/* 7. Metric Counter Pills */
 .stat-pill {
-    background: #f5f5f7;
-    border: 1px solid #e5e5ea;
-    border-radius: 10px;
-    padding: 10px 16px;
-    min-width: 110px;
+    background: #FFFFFF !important;
+    border: 1px solid #E5E7EB !important;
+    border-radius: 8px !important;
+    padding: 10px 14px !important;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02) !important;
 }
 .stat-pill-val {
-    font-size: 17px;
+    font-size: 18px;
     font-weight: 600;
-    color: #1d1d1f;
+    color: #111827;
 }
 .stat-pill-lbl {
     font-size: 11px;
     font-weight: 500;
-    color: #86868b;
+    color: #6B7280;
     text-transform: uppercase;
     letter-spacing: 0.04em;
     margin-top: 2px;
 }
 
-/* Badges */
+/* 8. Neutral Badges */
 .badge {
     display: inline-block;
     font-size: 11px;
     font-weight: 600;
     padding: 2px 7px;
-    border-radius: 6px;
+    border-radius: 5px;
     letter-spacing: 0.02em;
     text-transform: uppercase;
 }
 .badge-green {
-    background: #f0fdf4;
-    color: #15803d;
-    border: 1px solid #bbf7d0;
+    background: #ECFDF5;
+    color: #047857;
+    border: 1px solid #A7F3D0;
 }
 .badge-amber {
-    background: #fffbeb;
-    color: #b45309;
-    border: 1px solid #fde68a;
+    background: #FFFBEB;
+    color: #B45309;
+    border: 1px solid #FDE68A;
 }
 .badge-red {
-    background: #fef2f2;
-    color: #b91c1c;
-    border: 1px solid #fecaca;
+    background: #FEF2F2;
+    color: #B91C1C;
+    border: 1px solid #FECACA;
 }
 .badge-neutral {
-    background: #f5f5f7;
-    color: #636366;
-    border: 1px solid #e5e5ea;
+    background: #F3F4F6;
+    color: #4B5563;
+    border: 1px solid #E5E7EB;
 }
 .badge-blue {
-    background: #eff6ff;
-    color: #1d4ed8;
-    border: 1px solid #bfdbfe;
+    background: #EFF6FF;
+    color: #1D4ED8;
+    border: 1px solid #BFDBFE;
 }
 
-/* Buttons */
+/* 9. Clean Buttons */
 div.stButton > button {
-    border-radius: 8px !important;
+    border-radius: 7px !important;
     font-size: 13px !important;
     font-weight: 500 !important;
-    padding: 6px 14px !important;
-    border: 1px solid #d2d2d7 !important;
-    background-color: #ffffff !important;
-    color: #1d1d1f !important;
-    transition: all 0.12s ease-in-out !important;
+    padding: 5px 13px !important;
+    border: 1px solid #D1D5DB !important;
+    background-color: #FFFFFF !important;
+    color: #374151 !important;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03) !important;
+    transition: all 0.1s ease !important;
 }
 div.stButton > button:hover {
-    background-color: #f5f5f7 !important;
-    border-color: #bcbcc0 !important;
+    background-color: #F9FAFB !important;
+    border-color: #9CA3AF !important;
+    color: #111827 !important;
 }
 div.stButton > button[kind="primary"] {
-    background-color: #0071e3 !important;
-    color: #ffffff !important;
-    border: 1px solid #0071e3 !important;
+    background-color: #0071E3 !important;
+    color: #FFFFFF !important;
+    border: 1px solid #0071E3 !important;
 }
 div.stButton > button[kind="primary"]:hover {
-    background-color: #0077ed !important;
-    border-color: #0077ed !important;
+    background-color: #0077ED !important;
+    border-color: #0077ED !important;
 }
 
-/* Apple-style segmented tabs */
+/* 10. Apple Segmented Control Tabs */
 .stTabs [data-baseweb="tab-list"] {
-    gap: 4px !important;
-    background: #f5f5f7 !important;
-    padding: 4px !important;
-    border-radius: 10px !important;
-    border: 1px solid #e5e5ea !important;
-    margin-bottom: 20px !important;
+    background: #E5E7EB !important;
+    border: 1px solid #D1D5DB !important;
+    border-radius: 8px !important;
+    padding: 3px !important;
+    gap: 3px !important;
+    margin-bottom: 18px !important;
 }
 .stTabs [data-baseweb="tab"] {
-    border-radius: 7px !important;
-    padding: 6px 14px !important;
+    border-radius: 6px !important;
+    padding: 5px 14px !important;
     font-size: 13px !important;
     font-weight: 500 !important;
-    color: #636366 !important;
+    color: #4B5563 !important;
     border: none !important;
     background: transparent !important;
 }
 .stTabs [aria-selected="true"] {
-    background: #ffffff !important;
-    color: #1d1d1f !important;
-    box-shadow: 0 1px 2px rgba(0,0,0,0.06) !important;
+    background: #FFFFFF !important;
+    color: #111827 !important;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08) !important;
     font-weight: 600 !important;
 }
-.stTabs [data-baseweb="tab-border"] {
+.stTabs [data-baseweb="tab-border"], .stTabs [data-baseweb="tab-highlight"] {
     display: none !important;
 }
 
-/* Table styling */
+/* 11. DataFrame Table Container */
 div[data-testid="stDataFrame"] {
-    border: 1px solid #e5e5ea !important;
-    border-radius: 10px !important;
+    border: 1px solid #E5E7EB !important;
+    border-radius: 8px !important;
     overflow: hidden !important;
-    background: #ffffff !important;
+    background: #FFFFFF !important;
 }
 
-/* File Uploader */
+/* 12. File Uploader */
 div[data-testid="stFileUploader"] {
-    background: #ffffff;
-    border: 1px dashed #d2d2d7;
-    border-radius: 12px;
-    padding: 16px;
+    background: #FFFFFF !important;
+    border: 1px dashed #D1D5DB !important;
+    border-radius: 10px !important;
+    padding: 14px !important;
 }
 div[data-testid="stFileUploader"]:hover {
-    border-color: #0071e3;
-}
-
-/* Form input refinement */
-div[data-baseweb="input"] {
-    border-radius: 8px !important;
-}
-div[data-baseweb="select"] {
-    border-radius: 8px !important;
+    border-color: #0071E3 !important;
 }
 </style>
 """
 
 # ---------------------------------------------------------------------------
-# Session state
+# Session state initialization
 # ---------------------------------------------------------------------------
 
 def init_session():
@@ -327,15 +299,96 @@ def init_session():
 
 
 # ---------------------------------------------------------------------------
+# Human-Readable Description Generator
+# ---------------------------------------------------------------------------
+
+def describe_recommendation(rec: Recommendation) -> Dict[str, str]:
+    """
+    Produce crystal-clear, plain-English explanations of what the reviewer is approving.
+    Translates raw regex/internals into intuitive insurance data decisions.
+    """
+    op = rec.operation or ""
+    action = rec.action_type
+    src = rec.source_column
+    tgt = rec.target_column
+
+    if action == ActionType.COLUMN_MAPPING or op in ("column_rename", "trim_whitespace", ""):
+        title = f"Map column '{src}' &rarr; '{tgt}'"
+        summary = f"Assigns input column '{src}' to standard target field '{tgt}'."
+        if rec.confidence >= 0.95:
+            reason = f"Exact match: '{src}' is a recognized synonym for '{tgt}' in commercial property SOVs."
+        elif rec.confidence >= 0.85:
+            reason = f"High similarity: Column header and sample values match expected patterns for '{tgt}'."
+        else:
+            reason = f"Moderate similarity match: Please verify that '{src}' represents '{tgt}'."
+        impact = f"In the finalized dataset, this column will be renamed to '{tgt}'."
+
+    elif op == "strip_currency":
+        title = f"Clean currency format in '{tgt}'"
+        summary = "Removes currency symbols ($) and commas to store values as pure numeric floats."
+        reason = f"Found currency symbols in {rec.affected_rows} row(s) for monetary field '{tgt}'."
+        impact = "Converts formatted strings (e.g. '$1,500,000') into pure decimal numbers (1500000.0) required for underwriting models."
+
+    elif op == "normalize_sprinkler_code":
+        title = f"Standardize sprinkler indicators in '{tgt}'"
+        summary = "Converts informal fire protection text to canonical insurance codes (Y, N, Y13, Y13R)."
+        reason = f"Detected {rec.affected_rows} non-standard sprinkler value(s) in '{src}'."
+        impact = "Replaces informal entries (e.g. 'Yes', 'No') with standardized codes."
+
+    elif op == "normalize_state":
+        title = f"Standardize US state code in '{tgt}'"
+        summary = "Converts full state names or lowercase entries into standard 2-letter postal abbreviations."
+        reason = f"Detected non-abbreviated state name in {rec.affected_rows} row(s)."
+        impact = "Standardizes values to 2-letter ISO state codes (e.g. 'California' &rarr; 'CA')."
+
+    elif op == "to_year_int":
+        title = f"Standardize construction year in '{tgt}'"
+        summary = "Converts year values to clean 4-digit integers."
+        reason = f"Detected non-integer or decimal year formatting in {rec.affected_rows} row(s)."
+        impact = "Ensures Year Built is stored as a valid integer year."
+
+    elif op == "to_float":
+        title = f"Format '{tgt}' as numeric float"
+        summary = "Ensures numerical consistency for property exposure amounts."
+        reason = f"Detected string-encoded numbers in {rec.affected_rows} row(s)."
+        impact = "Casts text representations into standard floating point numbers."
+
+    elif op == "to_int":
+        title = f"Format '{tgt}' as integer"
+        summary = "Ensures values in this column are clean whole numbers."
+        reason = f"Detected float or string representations in {rec.affected_rows} row(s)."
+        impact = "Stores values as clean integers without decimals."
+
+    elif op == "flag_for_review":
+        title = f"Review data quality flag on '{tgt}'"
+        summary = f"Flagged finding: {rec.affected_rows} row(s) have data quality concerns (such as missing values or out-of-range figures)."
+        reason = rec.rationale if rec.rationale else f"Potential irregularity detected in '{tgt}'."
+        impact = "No automated data alteration is made. Approving confirms reviewer awareness; rejecting dismisses this alert."
+
+    else:
+        title = f"Apply {op.replace('_', ' ').title()} to '{tgt}'"
+        summary = f"Executes whitelisted transformation '{op}' on column '{tgt}'."
+        reason = rec.rationale
+        impact = f"Updates {rec.affected_rows} row(s) deterministically."
+
+    return {
+        "title": title,
+        "summary": summary,
+        "reason": reason,
+        "impact": impact,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Header & Workflow Stepper
 # ---------------------------------------------------------------------------
 
 def render_header():
     st.markdown(
         """
-        <div class="header-container">
-            <h1 class="header-title">Agentic SOV Intelligence System</h1>
-            <p class="header-subtitle">Deterministic transformation, cascading schema mapping, and human-in-the-loop review for commercial property SOVs.</p>
+        <div class="header-box">
+            <h1>Agentic SOV Intelligence System</h1>
+            <p>Deterministic transformation, cascading schema mapping, and human approval for commercial property SOVs.</p>
         </div>
         """,
         unsafe_allow_html=True,
@@ -352,9 +405,7 @@ def render_stepper(state: Optional[SOVState]):
     ]
 
     current_stage = state.stage if state else WorkflowStage.INIT
-    stage_names = [s[1] for s in stages]
 
-    # Map current state to an index 0..4
     stage_idx = -1
     if current_stage == WorkflowStage.DISCOVERED:
         stage_idx = 0
@@ -390,42 +441,41 @@ def render_stepper(state: Optional[SOVState]):
 # ---------------------------------------------------------------------------
 
 def render_upload_section():
-    with st.container():
-        uploaded = st.file_uploader(
-            "Select Statement of Values file",
-            type=["xlsx", "xls", "csv"],
-            key="file_uploader",
-            label_visibility="collapsed",
-        )
+    uploaded = st.file_uploader(
+        "Select Statement of Values file",
+        type=["xlsx", "xls", "csv"],
+        key="file_uploader",
+        label_visibility="collapsed",
+    )
 
-        col_info, col_btn = st.columns([3, 1])
+    col_info, col_btn = st.columns([3, 1])
 
-        with col_info:
-            if uploaded is not None:
-                size_kb = uploaded.size / 1024
-                ext = Path(uploaded.name).suffix.lower().lstrip(".")
-                st.markdown(
-                    f"<div style='font-size:13px;color:#1d1d1f;padding-top:6px;'>"
-                    f"Selected: <strong>{uploaded.name}</strong> "
-                    f"<span style='color:#86868b;'>({ext.upper()}, {size_kb:.1f} KB)</span>"
-                    f"</div>",
-                    unsafe_allow_html=True,
-                )
-            else:
-                st.markdown(
-                    "<div style='font-size:13px;color:#86868b;padding-top:6px;'>"
-                    "Supports multi-sheet workbooks, merged headers, and irregular layouts (.xlsx, .xls, .csv)"
-                    "</div>",
-                    unsafe_allow_html=True,
-                )
+    with col_info:
+        if uploaded is not None:
+            size_kb = uploaded.size / 1024
+            ext = Path(uploaded.name).suffix.lower().lstrip(".")
+            st.markdown(
+                f"<div style='font-size:13px;color:#111827;padding-top:6px;'>"
+                f"Selected: <strong>{uploaded.name}</strong> "
+                f"<span style='color:#6B7280;'>({ext.upper()}, {size_kb:.1f} KB)</span>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                "<div style='font-size:13px;color:#6B7280;padding-top:6px;'>"
+                "Supports multi-sheet workbooks, merged headers, and non-standard layouts (.xlsx, .xls, .csv)"
+                "</div>",
+                unsafe_allow_html=True,
+            )
 
-        with col_btn:
-            if uploaded is not None:
-                if st.button("Run Pipeline", type="primary", use_container_width=True):
-                    with st.spinner("Processing workbook through agent cascade…"):
-                        _run_pipeline(uploaded)
-            else:
-                st.button("Run Pipeline", disabled=True, use_container_width=True)
+    with col_btn:
+        if uploaded is not None:
+            if st.button("Run Pipeline", type="primary", key="btn_run_pipeline"):
+                with st.spinner("Processing workbook through agent cascade…"):
+                    _run_pipeline(uploaded)
+        else:
+            st.button("Run Pipeline", disabled=True, key="btn_run_pipeline_disabled")
 
 
 def _run_pipeline(uploaded_file):
@@ -477,7 +527,6 @@ def _run_pipeline(uploaded_file):
     st.session_state.pipeline_ran = True
     st.session_state.review_complete = False
     st.session_state.transformed = False
-    st.rerun()
 
 
 # ---------------------------------------------------------------------------
@@ -518,30 +567,29 @@ def render_review_section(state: SOVState):
             unsafe_allow_html=True,
         )
 
-    st.markdown("<div style='height: 16px;'></div>", unsafe_allow_html=True)
+    st.markdown("<div style='height: 14px;'></div>", unsafe_allow_html=True)
 
-    # Bulk actions & status alert
+    # Bulk actions & Lock alert
     col_actions, col_status = st.columns([1, 1])
 
     with col_actions:
         high_conf_pending = [r for r in pending if r.confidence >= config.HIGH_CONFIDENCE_THRESHOLD]
         if high_conf_pending:
-            if st.button(f"Approve High-Confidence ({len(high_conf_pending)} items ≥90%)", key="approve_high_btn"):
+            if st.button(f"Approve All High-Confidence ({len(high_conf_pending)} items ≥90%)", key="approve_high_btn"):
                 for r in high_conf_pending:
                     _approve_recommendation(state, r.id)
-                st.rerun()
 
     with col_status:
         if still_pending_required:
             st.markdown(
-                f"<div style='font-size:13px;color:#b45309;background:#fffbeb;border:1px solid #fde68a;padding:8px 12px;border-radius:8px;'>"
+                f"<div style='font-size:13px;color:#B45309;background:#FFFBEB;border:1px solid #FDE68A;padding:8px 12px;border-radius:7px;'>"
                 f"Export locked: {len(still_pending_required)} required decision(s) pending."
                 f"</div>",
                 unsafe_allow_html=True,
             )
         else:
             st.markdown(
-                f"<div style='font-size:13px;color:#15803d;background:#f0fdf4;border:1px solid #bbf7d0;padding:8px 12px;border-radius:8px;'>"
+                f"<div style='font-size:13px;color:#047857;background:#ECFDF5;border:1px solid #A7F3D0;padding:8px 12px;border-radius:7px;'>"
                 f"All required decisions complete. Ready for transformation."
                 f"</div>",
                 unsafe_allow_html=True,
@@ -549,7 +597,7 @@ def render_review_section(state: SOVState):
 
     st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
 
-    # Grouped review cards
+    # Grouped review sections
     action_groups = [
         (ActionType.COLUMN_MAPPING, "Column Mappings"),
         (ActionType.STANDARDISATION, "Standardisation"),
@@ -564,17 +612,19 @@ def render_review_section(state: SOVState):
 
         with st.expander(f"{label} ({len(group_recs)})", expanded=(action_type == ActionType.COLUMN_MAPPING)):
             for rec in group_recs:
-                _render_recommendation_item(state, rec)
+                _render_recommendation_card(state, rec)
 
-    # Transformation execution button once unlocked
+    # Apply approved transformations when unlocked
     if not still_pending_required:
         st.markdown("<div style='height: 16px;'></div>", unsafe_allow_html=True)
-        if st.button("Apply Approved Transformations", type="primary", use_container_width=True):
+        if st.button("Apply Approved Transformations", type="primary", key="btn_apply_transformations"):
             _run_transformation(state)
 
 
-def _render_recommendation_item(state: SOVState, rec: Recommendation):
-    # Status badges
+def _render_recommendation_card(state: SOVState, rec: Recommendation):
+    details = describe_recommendation(rec)
+
+    # Badges
     status_cls = {
         RecommendationStatus.PENDING: "badge-amber",
         RecommendationStatus.APPROVED: "badge-green",
@@ -588,25 +638,24 @@ def _render_recommendation_item(state: SOVState, rec: Recommendation):
     st.markdown(
         f"""
         <div class="surface-card">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px;">
                 <div>
-                    <span style="font-family:monospace;font-size:12px;color:#86868b;margin-right:8px;">{rec.id}</span>
-                    <strong style="font-size:14px;color:#1d1d1f;">{rec.source_column}</strong>
-                    <span style="color:#86868b;margin:0 6px;">→</span>
-                    <strong style="font-size:14px;color:#1d1d1f;">{rec.target_column}</strong>
+                    <span style="font-family:monospace;font-size:11px;color:#6B7280;margin-right:6px;">{rec.id}</span>
+                    <strong style="font-size:14px;color:#111827;">{details['title']}</strong>
                 </div>
                 <div style="display:flex;gap:6px;align-items:center;">
-                    <span class="badge {conf_cls}">Conf {conf_pct}</span>
+                    <span class="badge {conf_cls}">Confidence {conf_pct}</span>
                     <span class="badge {status_cls}">{rec.status.upper()}</span>
                 </div>
             </div>
-            <div style="font-size:12px;color:#636366;margin-bottom:8px;">
-                <span>Operation: <code>{rec.operation}</code></span>
-                <span style="margin:0 8px;">|</span>
-                <span>Affected rows: {rec.affected_rows}</span>
+            <div style="font-size:13px;color:#374151;margin-bottom:6px;line-height:1.4;">
+                {details['summary']}
             </div>
-            <div style="font-size:13px;color:#1d1d1f;margin-bottom:8px;line-height:1.4;">
-                {rec.rationale}
+            <div style="font-size:12px;color:#6B7280;margin-bottom:8px;line-height:1.4;">
+                <strong>Why:</strong> {details['reason']}
+            </div>
+            <div style="font-size:12px;color:#6B7280;margin-bottom:10px;line-height:1.4;">
+                <strong>Impact:</strong> {details['impact']}
             </div>
         """,
         unsafe_allow_html=True,
@@ -615,10 +664,10 @@ def _render_recommendation_item(state: SOVState, rec: Recommendation):
     if rec.before_example or rec.after_example:
         st.markdown(
             f"""
-            <div style="background:#f5f5f7;border-radius:8px;padding:6px 12px;font-size:12px;color:#1d1d1f;margin-bottom:10px;">
-                <span style="color:#86868b;">Before:</span> <code>{rec.before_example or 'null'}</code>
-                <span style="margin:0 8px;color:#86868b;">→</span>
-                <span style="color:#86868b;">After:</span> <code>{rec.after_example or 'null'}</code>
+            <div style="background:#F9FAFB;border:1px solid #E5E7EB;border-radius:6px;padding:6px 12px;font-size:12px;color:#374151;margin-bottom:10px;">
+                <span style="color:#6B7280;">Before:</span> <code>{rec.before_example or 'None'}</code>
+                <span style="margin:0 8px;color:#9CA3AF;">→</span>
+                <span style="color:#6B7280;">After:</span> <code>{rec.after_example or 'None'}</code>
             </div>
             """,
             unsafe_allow_html=True,
@@ -626,58 +675,67 @@ def _render_recommendation_item(state: SOVState, rec: Recommendation):
 
     if rec.uncertainty:
         st.markdown(
-            f"<div style='font-size:12px;color:#b45309;margin-bottom:8px;'>Note: {rec.uncertainty}</div>",
+            f"<div style='font-size:12px;color:#B45309;margin-bottom:8px;'>Note: {rec.uncertainty}</div>",
             unsafe_allow_html=True,
         )
 
-    # Controls
-    if rec.status == RecommendationStatus.PENDING:
-        col_appr, col_rej, col_edit = st.columns([1, 1, 1])
+    # Action Toolbar
+    col_appr, col_rej, col_edit, col_space = st.columns([1, 1, 1, 3])
 
+    if rec.status == RecommendationStatus.PENDING:
         with col_appr:
-            if st.button("Approve", key=f"app_{rec.id}", use_container_width=True):
+            if st.button("Approve", key=f"app_{rec.id}"):
                 _approve_recommendation(state, rec.id)
-                st.rerun()
 
         with col_rej:
-            if st.button("Reject", key=f"rej_{rec.id}", use_container_width=True):
+            if st.button("Reject", key=f"rej_{rec.id}"):
                 st.session_state[f"show_reject_{rec.id}"] = not st.session_state.get(f"show_reject_{rec.id}", False)
 
         with col_edit:
-            if st.button("Edit", key=f"edit_{rec.id}", use_container_width=True):
+            if st.button("Change Target", key=f"edit_{rec.id}"):
                 st.session_state[f"show_edit_{rec.id}"] = not st.session_state.get(f"show_edit_{rec.id}", False)
 
-        # Inline rejection note
-        if st.session_state.get(f"show_reject_{rec.id}"):
-            rej_note = st.text_input("Rejection note (optional)", key=f"rnote_{rec.id}")
-            c_r1, c_r2 = st.columns(2)
-            with c_r1:
-                if st.button("Confirm Rejection", key=f"conf_rej_{rec.id}", use_container_width=True):
-                    _reject_recommendation(state, rec.id, rej_note)
-                    st.session_state[f"show_reject_{rec.id}"] = False
-                    st.rerun()
-            with c_r2:
-                if st.button("Cancel", key=f"canc_rej_{rec.id}", use_container_width=True):
-                    st.session_state[f"show_reject_{rec.id}"] = False
-                    st.rerun()
+    elif rec.status == RecommendationStatus.APPROVED:
+        with col_appr:
+            st.markdown("<span style='font-size:12px;color:#047857;font-weight:500;'>Approved</span>", unsafe_allow_html=True)
+        with col_rej:
+            if st.button("Revert to Pending", key=f"revert_{rec.id}"):
+                _revert_recommendation(state, rec.id)
 
-        # Inline edit
-        if st.session_state.get(f"show_edit_{rec.id}"):
-            st.markdown("<div style='font-size:12px;font-weight:600;margin-top:8px;'>Edit Target Mapping</div>", unsafe_allow_html=True)
-            current_target = rec.target_column if rec.target_column in TARGET_FIELDS else TARGET_FIELDS[0]
-            target_idx = TARGET_FIELDS.index(current_target) if current_target in TARGET_FIELDS else 0
-            new_target = st.selectbox("Select Target Field", TARGET_FIELDS, index=target_idx, key=f"sel_target_{rec.id}")
+    elif rec.status == RecommendationStatus.REJECTED:
+        with col_appr:
+            if st.button("Re-Approve", key=f"reapp_{rec.id}"):
+                _approve_recommendation(state, rec.id)
+        with col_rej:
+            st.markdown(f"<span style='font-size:12px;color:#B91C1C;'>Rejected{': ' + rec.rejection_note if rec.rejection_note else ''}</span>", unsafe_allow_html=True)
 
-            c_e1, c_e2 = st.columns(2)
-            with c_e1:
-                if st.button("Save & Approve", key=f"save_edit_{rec.id}", use_container_width=True):
-                    _edit_and_approve_recommendation(state, rec.id, new_target)
-                    st.session_state[f"show_edit_{rec.id}"] = False
-                    st.rerun()
-            with c_e2:
-                if st.button("Cancel", key=f"canc_edit_{rec.id}", use_container_width=True):
-                    st.session_state[f"show_edit_{rec.id}"] = False
-                    st.rerun()
+    # Expandable rejection note
+    if st.session_state.get(f"show_reject_{rec.id}"):
+        st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
+        rej_note = st.text_input("Reason for rejection (optional feedback for agent re-reasoning)", key=f"rnote_{rec.id}")
+        cr1, cr2, _ = st.columns([1, 1, 3])
+        with cr1:
+            if st.button("Confirm Reject", key=f"conf_rej_{rec.id}"):
+                _reject_recommendation(state, rec.id, rej_note)
+                st.session_state[f"show_reject_{rec.id}"] = False
+        with cr2:
+            if st.button("Cancel", key=f"canc_rej_{rec.id}"):
+                st.session_state[f"show_reject_{rec.id}"] = False
+
+    # Expandable edit target field
+    if st.session_state.get(f"show_edit_{rec.id}"):
+        st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
+        current_target = rec.target_column if rec.target_column in TARGET_FIELDS else TARGET_FIELDS[0]
+        target_idx = TARGET_FIELDS.index(current_target) if current_target in TARGET_FIELDS else 0
+        new_target = st.selectbox("Assign to Standard Field", TARGET_FIELDS, index=target_idx, key=f"sel_target_{rec.id}")
+        ce1, ce2, _ = st.columns([1, 1, 3])
+        with ce1:
+            if st.button("Save & Approve", key=f"save_edit_{rec.id}"):
+                _edit_and_approve_recommendation(state, rec.id, new_target)
+                st.session_state[f"show_edit_{rec.id}"] = False
+        with ce2:
+            if st.button("Cancel", key=f"canc_edit_{rec.id}"):
+                st.session_state[f"show_edit_{rec.id}"] = False
 
     st.markdown("</div>", unsafe_allow_html=True)
 
@@ -699,6 +757,15 @@ def _approve_recommendation(state: SOVState, rec_id: str):
                     )
                 except Exception as e:
                     logger.warning("Memory store failure: %s", e)
+            break
+
+
+def _revert_recommendation(state: SOVState, rec_id: str):
+    for i, rec in enumerate(state.recommendations):
+        if rec.id == rec_id:
+            state.recommendations[i] = rec.model_copy(
+                update={"status": RecommendationStatus.PENDING}
+            )
             break
 
 
@@ -758,12 +825,11 @@ def _run_rereason(state: SOVState):
 
 def _run_transformation(state: SOVState):
     from app.agents.transformation import run_transformation
-    with st.spinner("Executing whitelisted transformations…"):
+    with st.spinner("Executing transformations…"):
         try:
             final_state = run_transformation(state)
             st.session_state.sov_state = final_state
             st.session_state.transformed = True
-            st.rerun()
         except Exception as e:
             st.error(f"Transformation execution error: {e}")
             logger.exception("Transformation error")
@@ -799,12 +865,12 @@ def render_mapping_section(state: SOVState):
             unsafe_allow_html=True,
         )
 
-    st.markdown("<div style='height: 16px;'></div>", unsafe_allow_html=True)
+    st.markdown("<div style='height: 14px;'></div>", unsafe_allow_html=True)
 
     if result.unmapped_target_fields:
         unmapped_str = ", ".join(result.unmapped_target_fields)
         st.markdown(
-            f"<div style='font-size:12px;color:#b45309;background:#fffbeb;border:1px solid #fde68a;padding:8px 12px;border-radius:8px;margin-bottom:12px;'>"
+            f"<div style='font-size:12px;color:#B45309;background:#FFFBEB;border:1px solid #FDE68A;padding:8px 12px;border-radius:6px;margin-bottom:12px;'>"
             f"Unmapped target fields: {unmapped_str}"
             f"</div>",
             unsafe_allow_html=True,
@@ -822,7 +888,7 @@ def render_mapping_section(state: SOVState):
         })
 
     df = pd.DataFrame(rows)
-    st.dataframe(df, use_container_width=True, hide_index=True)
+    st.dataframe(df, width="stretch", hide_index=True)
 
 
 # ---------------------------------------------------------------------------
@@ -840,12 +906,12 @@ def render_discovery_section(state: SOVState):
     if primary:
         st.markdown(
             f"""
-            <div class="surface-card" style="margin-bottom:16px;">
-                <div style="font-size:13px;color:#1d1d1f;">
+            <div class="surface-card" style="margin-bottom:14px;">
+                <div style="font-size:13px;color:#111827;">
                     <strong>Primary Sheet:</strong> <code>{primary.sheet_name}</code>
-                    <span style="margin:0 8px;color:#86868b;">|</span>
+                    <span style="margin:0 8px;color:#9CA3AF;">|</span>
                     <span>Header Row: {primary.header_row} (0-indexed)</span>
-                    <span style="margin:0 8px;color:#86868b;">|</span>
+                    <span style="margin:0 8px;color:#9CA3AF;">|</span>
                     <span>Confidence: {primary.confidence:.1%}</span>
                 </div>
             </div>
@@ -866,12 +932,12 @@ def render_discovery_section(state: SOVState):
             "Merged Cells": s.profile.merged_cell_count,
         })
 
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
 
     if primary and primary.reasoning:
         with st.expander("Discovery Reasoning Details", expanded=False):
             for r in primary.reasoning:
-                st.markdown(f"<div style='font-size:13px;color:#636366;'>• {r}</div>", unsafe_allow_html=True)
+                st.markdown(f"<div style='font-size:13px;color:#4B5563;'>• {r}</div>", unsafe_allow_html=True)
 
 
 # ---------------------------------------------------------------------------
@@ -911,7 +977,7 @@ def render_quality_section(state: SOVState):
             unsafe_allow_html=True,
         )
 
-    st.markdown("<div style='height: 16px;'></div>", unsafe_allow_html=True)
+    st.markdown("<div style='height: 14px;'></div>", unsafe_allow_html=True)
 
     if qr.issues:
         issue_rows = []
@@ -925,9 +991,9 @@ def render_quality_section(state: SOVState):
                 "Evidence": issue.evidence,
                 "Suggested Operation": issue.suggested_operation,
             })
-        st.dataframe(pd.DataFrame(issue_rows), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(issue_rows), width="stretch", hide_index=True)
     else:
-        st.markdown("<div style='font-size:13px;color:#15803d;padding:8px 0;'>No data quality issues detected.</div>", unsafe_allow_html=True)
+        st.markdown("<div style='font-size:13px;color:#047857;padding:8px 0;'>No data quality issues detected.</div>", unsafe_allow_html=True)
 
 
 # ---------------------------------------------------------------------------
@@ -941,22 +1007,19 @@ def render_preview_section(state: SOVState):
     approved = [r for r in state.recommendations if r.status == RecommendationStatus.APPROVED]
     preview_df = generate_preview_df(state, approved) if approved else pd.DataFrame()
 
-    st.markdown("<div class='surface-title'>Data Transformation Preview</div>", unsafe_allow_html=True)
-    st.markdown("<div class='surface-desc'>Comparison between raw extracted data and current approved transformation output.</div>", unsafe_allow_html=True)
-
     col_before, col_after = st.columns(2)
 
     with col_before:
-        st.markdown("<strong style='font-size:13px;color:#1d1d1f;'>Raw Source Data</strong>", unsafe_allow_html=True)
+        st.markdown("<strong style='font-size:13px;color:#111827;'>Raw Source Data</strong>", unsafe_allow_html=True)
         if source_df is not None and not source_df.empty:
-            st.dataframe(source_df.head(15), use_container_width=True)
+            st.dataframe(source_df.head(15), width="stretch")
         else:
             st.caption("Source data not loaded.")
 
     with col_after:
-        st.markdown("<strong style='font-size:13px;color:#1d1d1f;'>Transformed Output (17 Standard Fields)</strong>", unsafe_allow_html=True)
+        st.markdown("<strong style='font-size:13px;color:#111827;'>Transformed Output (17 Standard Fields)</strong>", unsafe_allow_html=True)
         if not preview_df.empty:
-            st.dataframe(preview_df.head(15), use_container_width=True)
+            st.dataframe(preview_df.head(15), width="stretch")
         else:
             st.caption("Approve recommendations in Human Review to generate preview.")
 
@@ -973,15 +1036,15 @@ def render_export_section(state: SOVState):
         ]
         if still_pending_required:
             st.markdown(
-                f"<div style='font-size:13px;color:#b45309;background:#fffbeb;border:1px solid #fde68a;padding:12px 16px;border-radius:10px;'>"
+                f"<div style='font-size:13px;color:#B45309;background:#FFFBEB;border:1px solid #FDE68A;padding:12px 16px;border-radius:8px;'>"
                 f"Export locked. Please complete the {len(still_pending_required)} required review decision(s) in the Review section."
                 f"</div>",
                 unsafe_allow_html=True,
             )
         else:
             st.markdown(
-                "<div style='font-size:13px;color:#636366;background:#f5f5f7;border:1px solid #e5e5ea;padding:12px 16px;border-radius:10px;'>"
-                "Review complete. Click 'Apply Approved Transformations' in the Review section to build the final deliverables."
+                "<div style='font-size:13px;color:#4B5563;background:#F3F4F6;border:1px solid #E5E7EB;padding:12px 16px;border-radius:8px;'>"
+                "Review complete. Click 'Apply Approved Transformations' in the Review section to build deliverables."
                 "</div>",
                 unsafe_allow_html=True,
             )
@@ -991,11 +1054,11 @@ def render_export_section(state: SOVState):
     if state.validation_passed:
         st.markdown(
             f"""
-            <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:14px 18px;margin-bottom:20px;">
-                <div style="font-size:14px;font-weight:600;color:#15803d;margin-bottom:2px;">
+            <div style="background:#ECFDF5;border:1px solid #A7F3D0;border-radius:8px;padding:12px 16px;margin-bottom:18px;">
+                <div style="font-size:14px;font-weight:600;color:#047857;margin-bottom:2px;">
                     Validation Passed: Exact 17-Column Schema
                 </div>
-                <div style="font-size:12px;color:#166534;">
+                <div style="font-size:12px;color:#065F46;">
                     Output data strictly adheres to target column types and order without fabricated missing values.
                 </div>
             </div>
@@ -1005,11 +1068,11 @@ def render_export_section(state: SOVState):
     else:
         st.markdown(
             f"""
-            <div style="background:#fef2f2;border:1px solid #fecaca;border-radius:10px;padding:14px 18px;margin-bottom:20px;">
-                <div style="font-size:14px;font-weight:600;color:#b91c1c;margin-bottom:2px;">
+            <div style="background:#FEF2F2;border:1px solid #FECACA;border-radius:8px;padding:12px 16px;margin-bottom:18px;">
+                <div style="font-size:14px;font-weight:600;color:#B91C1C;margin-bottom:2px;">
                     Validation Warning
                 </div>
-                <div style="font-size:12px;color:#991b1b;">
+                <div style="font-size:12px;color:#991B1B;">
                     {'; '.join(state.validation_errors)}
                 </div>
             </div>
@@ -1030,7 +1093,6 @@ def render_export_section(state: SOVState):
                 file_name="Cleaned_SOV.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 key="dl_sov_btn",
-                use_container_width=True,
             )
 
     with c2:
@@ -1043,7 +1105,6 @@ def render_export_section(state: SOVState):
                 file_name="Audit_Log.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 key="dl_audit_btn",
-                use_container_width=True,
             )
 
     # Audit Trail summary
@@ -1063,7 +1124,7 @@ def render_export_section(state: SOVState):
                     "Approved By": entry.approved_by,
                     "Timestamp": entry.timestamp,
                 })
-            st.dataframe(pd.DataFrame(audit_rows), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(audit_rows), width="stretch", hide_index=True)
 
 
 # ---------------------------------------------------------------------------
@@ -1072,20 +1133,19 @@ def render_export_section(state: SOVState):
 
 def render_sidebar(state: Optional[SOVState]):
     with st.sidebar:
-        st.markdown("<strong style='font-size:14px;color:#1d1d1f;'>System Configuration</strong>", unsafe_allow_html=True)
+        st.markdown("<strong style='font-size:14px;color:#111827;'>System Configuration</strong>", unsafe_allow_html=True)
         st.caption("Enterprise SOV Cleansing & Validation")
 
         st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
 
-        # Provider pill
         llm_avail = config.is_llm_available()
         status_text = f"{config.LLM_PROVIDER.upper()} Active" if llm_avail else "Deterministic Mode"
         badge_cls = "badge-green" if llm_avail else "badge-neutral"
 
         st.markdown(
             f"""
-            <div style="background:#ffffff;border:1px solid #e5e5ea;border-radius:8px;padding:10px 12px;margin-bottom:12px;">
-                <div style="font-size:11px;color:#86868b;text-transform:uppercase;margin-bottom:4px;">LLM Gateway</div>
+            <div style="background:#FFFFFF;border:1px solid #E5E7EB;border-radius:8px;padding:10px 12px;margin-bottom:12px;">
+                <div style="font-size:11px;color:#6B7280;text-transform:uppercase;margin-bottom:4px;">LLM Gateway</div>
                 <span class="badge {badge_cls}">{status_text}</span>
             </div>
             """,
@@ -1095,8 +1155,8 @@ def render_sidebar(state: Optional[SOVState]):
         if state and state.file_meta:
             st.markdown(
                 f"""
-                <div style="background:#ffffff;border:1px solid #e5e5ea;border-radius:8px;padding:10px 12px;margin-bottom:12px;font-size:12px;color:#1d1d1f;">
-                    <div style="font-size:11px;color:#86868b;text-transform:uppercase;margin-bottom:4px;">Active Session</div>
+                <div style="background:#FFFFFF;border:1px solid #E5E7EB;border-radius:8px;padding:10px 12px;margin-bottom:12px;font-size:12px;color:#111827;">
+                    <div style="font-size:11px;color:#6B7280;text-transform:uppercase;margin-bottom:4px;">Active Session</div>
                     <div><strong>File:</strong> {state.file_meta.original_filename}</div>
                     <div><strong>Sheet:</strong> {state.primary_sheet_name or 'None'}</div>
                 </div>
@@ -1104,13 +1164,12 @@ def render_sidebar(state: Optional[SOVState]):
                 unsafe_allow_html=True,
             )
 
-        if st.button("Reset Session", use_container_width=True):
+        if st.button("Reset Session", key="btn_reset_session"):
             st.session_state.sov_state = None
             st.session_state.pipeline_ran = False
             st.session_state.review_complete = False
             st.session_state.transformed = False
             st.session_state.session_id = uuid.uuid4().hex[:12]
-            st.rerun()
 
 
 # ---------------------------------------------------------------------------
@@ -1128,7 +1187,7 @@ def main():
     render_sidebar(state)
 
     if state and st.session_state.pipeline_ran:
-        st.markdown("<div style='height: 16px;'></div>", unsafe_allow_html=True)
+        st.markdown("<div style='height: 14px;'></div>", unsafe_allow_html=True)
 
         tab_labels = [
             "Review",
