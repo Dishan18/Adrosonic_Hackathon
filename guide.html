@@ -612,6 +612,7 @@
         <li><strong>Null Preservation:</strong> Missing/blank values stay empty&mdash;the system never synthesizes property values. Fractions such as 1.5 storeys are kept, not truncated.</li>
         <li><strong>Schema Contract:</strong> Ensures output has exactly the 17 target columns in the canonical order; numeric Zip cells are formatted <code>00000</code>.</li>
         <li><strong>Validation:</strong> Pandera checks column presence and order; a type check reports non-numeric or non-integer values in numeric fields.</li>
+        <li><strong>Unclaimed Column Handling:</strong> Unmapped source columns are surfaced in the Review tab. The human reviewer can reject them (dropped from output) or manually assign them to any target field. Multiple columns assigned to the same target field are automatically merged into a single cell separated by a space. All decisions are tracked in <code>Audit_Log.xlsx</code>.</li>
         <li><strong>Audit Logging:</strong> One entry per rename and per applied operation (sample before/after and rows changed), recorded before the change is written.</li>
       </ul>
     </div>
@@ -818,6 +819,7 @@
     stage: WorkflowStage = WorkflowStage.INIT
     error_message: Optional[str] = None
     audit_log: List[AuditEntry] = []
+    unclaimed_decisions: Dict[str, str] = {}           # Human decisions on unclaimed columns (assign/reject)
     session_id: str = ""
     re_reason_feedback: Optional[str] = None</code></pre>
     </div>
