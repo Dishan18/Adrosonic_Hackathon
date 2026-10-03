@@ -1,194 +1,284 @@
-﻿# Adrosonic_Hackathon
-# Agentic SOV Intelligence System
+# 🏢 Agentic SOV Intelligence System
 
-> **Messy SOV in. Trusted exposure data out.**
+> **AI proposes. Code verifies. Humans approve. Everything is audited.**
 
-An agentic AI system that transforms chaotic **Statements of Values (SOVs)** into schema-perfect, audit-ready exposure data while keeping a human in control of every change. The system follows a simple principle:
-
-**AI proposes. Code verifies. Humans approve. Everything is audited.** :chatgpt-content-reference{index="0"}
+An end-to-end agentic pipeline for cleansing and standardising chaotic Statement of Values (SOV) insurance data into an exact 17-field schema, with full human-in-the-loop control and a comprehensive audit trail.
 
 ---
 
-## Overview
+## Architecture
 
-A Statement of Values (SOV) contains critical information about insured assets, including location, construction, occupancy, and insured values. In practice, SOV files arrive in inconsistent formats with different sheet layouts, arbitrary header rows, merged cells, abbreviations, and malformed values.
+```
+Upload SOV File
+      │
+      ▼
+┌─────────────────────────────────────────┐
+│  Agent 1: Sheet Intelligence & Discovery│  ← Ranks sheets, finds headers
+│  (LangGraph Node: discover_sheets)      │     unmerges cells
+└─────────────────────────────────────────┘
+      │
+      ▼
+┌─────────────────────────────────────────┐
+│  Agent 2: Schema Mapping Agent          │  ← 4-stage cascade:
+│  (LangGraph Node: map_schema)           │    Memory→Exact→Fuzzy→Semantic→LLM
+└─────────────────────────────────────────┘
+      │
+      ▼
+┌─────────────────────────────────────────┐
+│  Agent 3: Data Quality & Reasoning      │  ← Deterministic rules + LLM
+│  (LangGraph Node: assess_quality)       │    explanation & recommendations
+└─────────────────────────────────────────┘
+      │
+      ▼
+┌─────────────────────────────────────────┐
+│  Human Review (HITL)                    │  ← Approve / Reject / Edit
+│  (LangGraph interrupt)                  │    Rejection → re-reasoning loop
+└─────────────────────────────────────────┘
+      │
+      ▼
+┌─────────────────────────────────────────┐
+│  Agent 4: Controlled Transformation     │  ← Only whitelisted ops
+│  (LangGraph Node: transform_export)     │    LLM never touches data
+└─────────────────────────────────────────┘
+      │
+      ▼
+ Cleaned_SOV.xlsx (17 fields, validated)
+ Audit_Log.xlsx (full transformation trail)
+```
 
-This makes manual cleansing slow, error-prone, and difficult to standardize. :chatgpt-content-reference{index="1"}
+### Four Agents (Non-negotiable)
 
-**Agentic SOV Intelligence System** solves this using four collaborating agents:
+| Agent | Role | Key Tech |
+|-------|------|----------|
+| 1 | Sheet Discovery & Intelligence | openpyxl, pandas, heuristic scoring |
+| 2 | Schema Mapping (cascade) | RapidFuzz, sentence-transformers, ChromaDB, LLM |
+| 3 | Data Quality & Reasoning | Deterministic rules + LLM explanation |
+| 4 | Controlled Transformation | Whitelist registry, Pandera validation |
 
-1. **Sheet Discovery Agent** – identifies the relevant sheets and header rows and repairs workbook structure.
-2. **Schema Mapping Agent** – maps client-specific headers to the required 17-field target schema.
-3. **Data Quality Agent** – detects anomalies and generates explainable correction recommendations.
-4. **Controlled Transformation Agent** – applies only human-approved transformations and produces the final validated output. :chatgpt-content-reference{index="2"}
+### Exact 17-Field Output Schema
 
----
-
-## Key Features
-
-### Intelligent Sheet Discovery
-
-The system profiles every worksheet using:
-
-- Row volume
-- Column richness
-- Null ratio
-- Numeric density
-- Merged-cell information
-
-It identifies the most likely primary sheet and header row, repairs merged or multi-row headers, removes irrelevant blank/total rows, and provides confidence and reasoning for its classification. :chatgpt-content-reference{index="3"}
-
-### Multi-Stage Schema Mapping
-
-Header mapping uses a cascade where cheaper and more deterministic methods are attempted before involving the LLM:
-
-1. Human-approved mapping memory
-2. Exact normalized matching
-3. Fuzzy matching and abbreviation expansion
-4. Semantic embeddings
-5. LLM-based candidate selection
-
-This minimizes unnecessary LLM usage while improving reliability for previously unseen headers. :chatgpt-content-reference{index="4"}
-
-### Data Quality Detection
-
-The system checks for:
-
-- Missing values
-- Incorrect data types
-- Logical inconsistencies
-- Formatting problems
-- Invalid allowed values
-- Duplicate references
-
-The LLM explains grouped anomalies rather than modifying individual rows directly. :chatgpt-content-reference{index="5"}
-
-### Human-in-the-Loop Approval
-
-No AI-generated recommendation is automatically applied.
-
-Reviewers can:
-
-- **Approve**
-- **Reject with a note**
-- **Edit**
-
-High-confidence recommendations can be approved together, while uncertain recommendations are sent for manual review. Rejected recommendations can be re-evaluated using the reviewer's feedback and the original evidence. :chatgpt-content-reference{index="6"}
-
-### Controlled Transformations
-
-The system supports four controlled action types:
-
-- `column_mapping`
-- `data_correction`
-- `standardisation`
-- `flag_for_review`
-
-The LLM only selects an operation from a predefined whitelist. Deterministic code performs the actual transformation. :chatgpt-content-reference{index="7"}
-
-### Complete Audit Trail
-
-Every applied change records information such as:
-
-- Source column
-- Target column
-- Transformation
-- Original value
-- Transformed value
-- Confidence
-- Approver
-- Timestamp
-
-This makes every modification traceable and audit-ready. :chatgpt-content-reference{index="8"}
+| Field | Type |
+|-------|------|
+| Reference | String |
+| Address | String |
+| City | String |
+| State | String |
+| Zip | Integer |
+| County | String |
+| Country | String |
+| Building Value | Float |
+| Contents | Float |
+| BI | Float |
+| Occupancy | String |
+| Construction | String |
+| Storeys | Integer |
+| Number of Buildings | Integer |
+| Year Built | Integer |
+| Fire Sprinklers (Y/N) | String |
+| Other | Float |
 
 ---
 
-## System Architecture
+## Tech Stack
 
-The system is organized into five replaceable layers:
-
-### 1. Presentation Layer
-
-- Streamlit review console
-- Live agent workflow graph
-- Before/after data preview
-- SOV and audit-log downloads
-
-### 2. Orchestration Layer
-
-- LangGraph `StateGraph`
-- Typed `SOVState`
-- Human approval using `interrupt()`
-- SQLite checkpointing for pause/resume workflows
-
-### 3. Agent Layer
-
-- Sheet Discovery
-- Schema Mapping
-- Data Quality & Reasoning
-- Controlled Transformation
-
-### 4. AI Services Layer
-
-- RapidFuzz
-- `bge-small` embeddings
-- Groq / Ollama LLM gateway
-- Deterministic validation and rule engine
-
-### 5. Data Layer
-
-- pandas
-- openpyxl
-- ChromaDB
-- JSON/XLSX audit storage
-- Ephemeral session files :chatgpt-content-reference{index="9"}
+| Layer | Technology |
+|-------|-----------|
+| Orchestration | LangGraph 1.2 (StateGraph + HITL interrupt) |
+| State | Pydantic v2 `SOVState` |
+| LLM (primary) | Groq Llama 3.3 70B |
+| LLM (fallback) | Ollama (local) |
+| Embeddings | sentence-transformers `bge-small-en-v1.5` |
+| Vector memory | ChromaDB (persistent) |
+| Fuzzy matching | RapidFuzz |
+| Data | pandas + openpyxl |
+| Validation | Pandera |
+| UI | Streamlit |
+| Checkpointing | SQLite (via langgraph-checkpoint-sqlite) |
+| Testing | pytest |
 
 ---
 
-## Workflow
+## Installation
 
-```text
-              ┌─────────────────┐
-              │    Upload SOV   │
-              │   XLSX / CSV    │
-              └────────┬────────┘
-                       │
-                       ▼
-              ┌─────────────────┐
-              │ Agent 1         │
-              │ Sheet Discovery │
-              └────────┬────────┘
-                       │
-                       ▼
-              ┌─────────────────┐
-              │ Agent 2         │
-              │ Schema Mapping  │
-              └────────┬────────┘
-                       │
-                       ▼
-              ┌─────────────────┐
-              │ Agent 3         │
-              │ Data Quality    │
-              │ & Reasoning     │
-              └────────┬────────┘
-                       │
-                       ▼
-              ┌─────────────────┐
-              │  Human Review   │
-              │ Approve / Edit  │
-              │ / Reject        │
-              └────────┬────────┘
-                       │
-                Approved Changes
-                       │
-                       ▼
-              ┌─────────────────┐
-              │ Agent 4         │
-              │ Transformation  │
-              └────────┬────────┘
-                       │
-                       ▼
-              ┌─────────────────┐
-              │ Cleaned SOV     │
-              │ + Audit Log     │
-              └─────────────────┘
+```bash
+# 1. Clone / enter the repo
+cd d:\Adrosonic
+
+# 2. Install dependencies
+pip install -r requirements.txt
+
+# 3. Copy and configure environment
+copy .env.template .env
+# Edit .env to add your GROQ_API_KEY (or configure Ollama)
+```
+
+---
+
+## Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `LLM_PROVIDER` | `groq` | `groq` or `ollama` |
+| `GROQ_API_KEY` | *(empty)* | Your Groq API key |
+| `GROQ_MODEL` | `llama-3.3-70b-versatile` | Groq model |
+| `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama endpoint |
+| `OLLAMA_MODEL` | `llama3.2` | Ollama model |
+| `EMBEDDING_MODEL` | `BAAI/bge-small-en-v1.5` | HuggingFace embedding model |
+| `HIGH_CONFIDENCE_THRESHOLD` | `0.90` | Threshold for Approve All |
+| `FUZZY_THRESHOLD` | `0.75` | RapidFuzz score threshold |
+| `SEMANTIC_THRESHOLD` | `0.60` | Semantic similarity threshold |
+
+---
+
+## LLM Setup
+
+### Option A: Groq (Recommended — free tier available)
+
+1. Get a free API key at [console.groq.com](https://console.groq.com)
+2. Set `LLM_PROVIDER=groq` and `GROQ_API_KEY=your_key` in `.env`
+
+### Option B: Ollama (fully local)
+
+```bash
+# Install Ollama from https://ollama.ai
+ollama pull llama3.2
+
+# Set in .env:
+# LLM_PROVIDER=ollama
+# OLLAMA_BASE_URL=http://localhost:11434
+# OLLAMA_MODEL=llama3.2
+```
+
+> The system works in **deterministic-only mode** if no LLM is configured.
+> LLM features (enriched explanations, ambiguous mapping resolution) will be skipped gracefully.
+
+---
+
+## Run the Application
+
+```bash
+# Start the Streamlit UI
+streamlit run app/ui/streamlit_app.py
+
+# The app opens at: http://localhost:8501
+```
+
+---
+
+## Run Tests
+
+```bash
+# Full test suite
+python -m pytest tests/ -v
+
+# With coverage
+python -m pytest tests/ -v --cov=app --cov-report=html
+
+# Specific test class
+python -m pytest tests/test_sov_system.py::TestSchemaValidation -v
+```
+
+---
+
+## Run Benchmark
+
+```bash
+python benchmark.py
+```
+
+Outputs per-sample and aggregate scores for:
+- Mapping Accuracy (target: ≥74%)
+- Anomaly Recall (target: ≥90%)
+- Transformation Correctness (target: ≥95%)
+- Explainability Coverage (target: 100%)
+- Audit Completeness (target: 100%)
+
+---
+
+## Demo Flow (10-minute walkthrough)
+
+1. **Upload** `data/samples/sample2_messy.xlsx` in the Upload tab
+2. Click **Run Pipeline**
+3. **Sheet Discovery** tab: see sheet rankings, header row at row 5, merged cell info
+4. **Schema Mapping** tab: see 17 column mappings with confidence scores
+5. **Quality Report** tab: see ≥3 issues (currency symbols, negative value, duplicate reference)
+6. **Human Review** tab:
+   - Click **Approve All** for high-confidence (≥90%) recommendations
+   - Accept one column mapping recommendation manually
+   - Reject `strip_currency` with note: *"These are already clean floats"*
+   - See Agent 3 re-reason with that feedback
+7. Click **Apply Approved Transformations**
+8. **Export** tab: download `Cleaned_SOV.xlsx` and `Audit_Log.xlsx`
+9. Verify schema: exactly 17 columns in exact order
+
+---
+
+## Project Structure
+
+```
+d:\Adrosonic\
+├── app/
+│   ├── agents/
+│   │   ├── sheet_discovery.py     # Agent 1
+│   │   ├── schema_mapping.py      # Agent 2
+│   │   ├── quality_reasoning.py   # Agent 3
+│   │   └── transformation.py      # Agent 4
+│   ├── orchestration/
+│   │   ├── graph.py               # LangGraph StateGraph
+│   │   └── state.py               # State initialization
+│   ├── services/
+│   │   ├── llm/gateway.py         # LLM gateway (Groq/Ollama)
+│   │   ├── embeddings/encoder.py  # Sentence-transformer embeddings
+│   │   ├── memory/chroma_store.py # ChromaDB vector memory
+│   │   └── scoring/quality_score.py
+│   ├── schemas/
+│   │   ├── state_models.py        # Pydantic SOVState + all models
+│   │   ├── target_schema.py       # 17-field schema definitions
+│   │   └── recommendations.py     # LLM output schemas
+│   ├── processing/
+│   │   ├── workbook.py            # Excel/CSV loading, header detection
+│   │   ├── profiling.py           # Value profiling
+│   │   ├── transformations.py     # Whitelisted transformation registry
+│   │   └── validation.py          # Pandera schema validation
+│   ├── audit/logger.py            # Audit trail generation
+│   ├── ui/streamlit_app.py        # Streamlit HITL interface
+│   └── config.py                  # Environment config
+├── tests/
+│   └── test_sov_system.py         # Comprehensive pytest suite (75+ tests)
+├── data/
+│   ├── samples/                   # Test SOV files
+│   └── ground_truth/              # Benchmark labels
+├── benchmark.py                   # Scoring harness
+├── requirements.txt
+├── .env.template
+└── progress.md
+```
+
+---
+
+## Security Model
+
+- **Data minimisation**: LLM receives only headers, definitions, and limited masked samples
+- **No API keys in code**: All secrets via `.env` (`.gitignore`d)
+- **LLM never modifies data**: Only deterministic code applies transformations
+- **Per-session temp storage**: Uploaded files stored in `uploads/` and cleaned after use
+- **Whitelist-only transformations**: LLM cannot inject arbitrary code
+
+---
+
+## Design Constraints (Non-Negotiable)
+
+1. ✅ Four distinct agents
+2. ✅ Shared typed Pydantic `SOVState`
+3. ✅ LLM never directly edits data
+4. ✅ Deterministic code performs transformations
+5. ✅ Human approval required before Agent 4
+6. ✅ Missing data is never fabricated
+7. ✅ Exactly 17 target columns
+8. ✅ Exact field names and ordering
+9. ✅ Full audit trail
+10. ✅ Low-confidence recommendations require review
+11. ✅ Rejection feedback triggers re-reasoning or escalation
+12. ✅ No hardcoded API keys
+13. ✅ Malformed files fail gracefully
+14. ✅ Export locked until review complete
