@@ -28,6 +28,9 @@ class Config:
     # Ollama settings
     OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
     OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "mistral")
+    # True only when OLLAMA_BASE_URL is set explicitly (env or .env). The
+    # default URL above is not an opt-in to use Ollama as a fallback.
+    OLLAMA_CONFIGURED: bool = bool(os.getenv("OLLAMA_BASE_URL"))
 
     # Embedding model
     EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "BAAI/bge-small-en-v1.5")
@@ -55,7 +58,7 @@ class Config:
     FUZZY_THRESHOLD: float = float(os.getenv("FUZZY_THRESHOLD", "0.75"))
 
     # Semantic similarity threshold
-    SEMANTIC_THRESHOLD: float = float(os.getenv("SEMANTIC_THRESHOLD", "0.60"))
+    SEMANTIC_THRESHOLD: float = float(os.getenv("SEMANTIC_THRESHOLD", "0.70"))
 
     # High-confidence threshold (eligible for Approve All)
     HIGH_CONFIDENCE_THRESHOLD: float = float(os.getenv("HIGH_CONFIDENCE_THRESHOLD", "0.90"))
@@ -72,15 +75,24 @@ class Config:
         str(Path(__file__).parent.parent / "uploads"),
     )
 
-    @classmethod
-    def is_llm_available(cls) -> bool:
-        if cls.LLM_PROVIDER == "groq":
-            return bool(cls.GROQ_API_KEY or cls.GEMINI_API_KEY)
-        if cls.LLM_PROVIDER == "gemini":
-            return bool(cls.GEMINI_API_KEY)
-        if cls.LLM_PROVIDER == "ollama":
+    # LLM_PROVIDER values that switch the LLM off (deterministic-only mode)
+    LLM_DISABLED_VALUES = {"none", "off", "disabled"}
+
+    def is_llm_available(self=None) -> bool:
+        target = self if self is not None else globals().get("config")
+        provider = (getattr(target, "LLM_PROVIDER", None) or "").lower()
+        disabled = getattr(target, "LLM_DISABLED_VALUES", {"none", "off", "disabled"})
+        if provider in disabled:
+            return False
+        groq_key = getattr(target, "GROQ_API_KEY", "")
+        gemini_key = getattr(target, "GEMINI_API_KEY", "")
+        if provider == "groq":
+            return bool(groq_key or gemini_key)
+        if provider == "gemini":
+            return bool(gemini_key)
+        if provider == "ollama":
             return True  # Assume reachable; will fail gracefully at call time
-        return bool(cls.GROQ_API_KEY or cls.GEMINI_API_KEY)
+        return bool(groq_key or gemini_key)
 
 
 config = Config()

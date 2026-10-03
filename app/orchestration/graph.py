@@ -11,7 +11,7 @@ SQLite checkpointing enables pause/resume.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from app.schemas.state_models import (
     Recommendation,
@@ -33,7 +33,9 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 def _state_to_dict(state: SOVState) -> Dict:
-    return state.model_dump()
+    # mode="json" stores enums as plain strings, so checkpoints never contain
+    # application classes (LangGraph's msgpack serializer refuses those).
+    return state.model_dump(mode="json")
 
 
 def _dict_to_state(d: Dict) -> SOVState:
@@ -61,10 +63,10 @@ def node_assess_quality(state: Dict) -> Dict:
 def node_human_review(state: Dict) -> Dict:
     """
     HITL node: this is an interrupt point.
-    LangGraph will pause here and wait for human input.
-    The UI resumes the graph by supplying decisions.
+    LangGraph pauses before this node and waits for human input.
+    The caller resumes the graph after writing decisions into the state
+    (see resume_pipeline_after_review).
     """
-    # In headless mode (tests), auto-approve all high-confidence recs
     s = _dict_to_state(state)
     s.stage = WorkflowStage.HUMAN_REVIEW
     return _state_to_dict(s)
@@ -76,11 +78,33 @@ def node_transform(state: Dict) -> Dict:
     return _state_to_dict(result)
 
 
+def _rejections_awaiting_rereason(s: SOVState) -> List[Recommendation]:
+    return [
+        r for r in s.recommendations
+        if r.status == RecommendationStatus.REJECTED
+        and r.rejection_note
+        and not r.feedback_processed
+        and r.re_reason_count < config.MAX_REREASON_ATTEMPTS
+    ]
+
+
 def node_re_reason(state: Dict) -> Dict:
-    """Re-reason node: called when reviewer rejects a recommendation."""
+    """Re-reason node: called when reviewer rejects a recommendation with a note."""
     s = _dict_to_state(state)
+    pending = _rejections_awaiting_rereason(s)
+    s.re_reason_feedback = "\n".join(
+        f"Recommendation {r.id} ({r.operation} on '{r.target_column}') rejected: {r.rejection_note}"
+        for r in pending
+    ) or None
     s.stage = WorkflowStage.ASSESSING
     result = run_quality_reasoning(s)
+
+    # Mark the feedback as consumed so routing does not loop back here.
+    handled = {r.id for r in pending}
+    result.recommendations = [
+        r.model_copy(update={"feedback_processed": True}) if r.id in handled else r
+        for r in result.recommendations
+    ]
     return _state_to_dict(result)
 
 
@@ -111,27 +135,18 @@ def route_after_assessment(state: Dict) -> Literal["human_review", "error"]:
 
 def route_after_human_review(
     state: Dict,
-) -> Literal["transform_export", "re_reason", "error"]:
+) -> Literal["transform_export", "re_reason", "human_review", "error"]:
     """
     Route after human review:
-    - If there are rejected recs with feedback → re_reason
-    - If all low-confidence recs decided → transform_export
-    - Otherwise stay at human_review (interrupt)
+    - If there are rejected recs with unprocessed feedback → re_reason
+    - If all review-required recs are decided → transform_export
+    - Otherwise stay at human_review (interrupt again)
     """
     s = _dict_to_state(state)
     if s.stage == WorkflowStage.ERROR:
         return "error"
 
-    # Check for rejected recs needing re-reasoning
-    rejected_with_feedback = [
-        r for r in s.recommendations
-        if r.status == RecommendationStatus.REJECTED
-        and r.rejection_note
-        and r.re_reason_count < config.MAX_REREASON_ATTEMPTS
-    ]
-
-    if rejected_with_feedback:
-        # Feed back the first rejection note
+    if _rejections_awaiting_rereason(s):
         return "re_reason"
 
     # Check if all blocking recs are decided
@@ -162,15 +177,37 @@ def route_error(state: Dict) -> str:
 # Build the graph
 # ---------------------------------------------------------------------------
 
+# Compiled graphs are cached: an in-memory checkpointer only survives between
+# run and resume if the same compiled graph is reused.
+_COMPILED: Dict[bool, Any] = {}
+
+
+def _make_checkpointer():
+    """SQLite checkpointer when available; in-memory otherwise (interrupts need one)."""
+    try:
+        import sqlite3
+        from langgraph.checkpoint.sqlite import SqliteSaver
+
+        conn = sqlite3.connect(config.CHECKPOINT_DB, check_same_thread=False)
+        logger.info("Graph checkpointing: SQLite (%s).", config.CHECKPOINT_DB)
+        return SqliteSaver(conn)
+    except Exception as e:
+        from langgraph.checkpoint.memory import InMemorySaver
+
+        logger.warning("SQLite checkpointing unavailable (%s) — using in-memory checkpoints.", e)
+        return InMemorySaver()
+
+
 def build_graph(use_checkpointing: bool = True):
     """
     Build and compile the LangGraph StateGraph.
-    Returns a compiled graph.
+    Returns a compiled graph (cached per checkpointing mode).
     """
+    if use_checkpointing in _COMPILED:
+        return _COMPILED[use_checkpointing]
+
     try:
         from langgraph.graph import StateGraph, END
-        from langgraph.checkpoint.sqlite import SqliteSaver
-        import sqlite3
     except ImportError as e:
         raise ImportError(f"LangGraph not installed: {e}") from e
 
@@ -189,39 +226,53 @@ def build_graph(use_checkpointing: bool = True):
     # Entry point
     graph.set_entry_point("discover_sheets")
 
-    # Edges
-    graph.add_conditional_edges("discover_sheets", route_after_discovery)
-    graph.add_conditional_edges("map_schema", route_after_mapping)
-    graph.add_conditional_edges("assess_quality", route_after_assessment)
-    graph.add_conditional_edges("human_review", route_after_human_review)
-    graph.add_conditional_edges("re_reason", route_after_rereason)
+    # Edges (explicit path maps: every value a router can return must be listed)
+    graph.add_conditional_edges(
+        "discover_sheets", route_after_discovery,
+        {"map_schema": "map_schema", "error": "error"},
+    )
+    graph.add_conditional_edges(
+        "map_schema", route_after_mapping,
+        {"assess_quality": "assess_quality", "error": "error"},
+    )
+    graph.add_conditional_edges(
+        "assess_quality", route_after_assessment,
+        {"human_review": "human_review", "error": "error"},
+    )
+    graph.add_conditional_edges(
+        "human_review", route_after_human_review,
+        {
+            "transform_export": "transform_export",
+            "re_reason": "re_reason",
+            "human_review": "human_review",
+            "error": "error",
+        },
+    )
+    graph.add_conditional_edges(
+        "re_reason", route_after_rereason,
+        {"human_review": "human_review", "error": "error"},
+    )
     graph.add_edge("transform_export", END)
     graph.add_edge("error", END)
 
-    # Interrupt at human_review for HITL
-    graph.set_finish_point("transform_export")
-
-    # Checkpointing
+    # Interrupt at human_review for HITL. An interrupt requires a checkpointer,
+    # so one is always attached; use_checkpointing selects SQLite persistence.
     if use_checkpointing:
-        try:
-            conn = sqlite3.connect(config.CHECKPOINT_DB, check_same_thread=False)
-            checkpointer = SqliteSaver(conn)
-            compiled = graph.compile(
-                checkpointer=checkpointer,
-                interrupt_before=["human_review"],
-            )
-            logger.info("Graph compiled with SQLite checkpointing.")
-        except Exception as e:
-            logger.warning("Checkpointing failed (%s) — compiling without.", e)
-            compiled = graph.compile(interrupt_before=["human_review"])
+        checkpointer = _make_checkpointer()
     else:
-        compiled = graph.compile(interrupt_before=["human_review"])
+        from langgraph.checkpoint.memory import InMemorySaver
+        checkpointer = InMemorySaver()
 
+    compiled = graph.compile(
+        checkpointer=checkpointer,
+        interrupt_before=["human_review"],
+    )
+    _COMPILED[use_checkpointing] = compiled
     return compiled
 
 
 # ---------------------------------------------------------------------------
-# Simple synchronous runner (for tests / CLI)
+# Simple synchronous runner (for UI / tests / CLI)
 # ---------------------------------------------------------------------------
 
 def run_pipeline_to_review(
@@ -229,7 +280,8 @@ def run_pipeline_to_review(
     thread_id: str = "default",
 ) -> SOVState:
     """
-    Run the pipeline from start through assess_quality, stopping at human_review.
+    Run the pipeline from start through assess_quality, stopping before
+    human_review. Use a fresh thread_id per pipeline run.
     """
     graph = build_graph(use_checkpointing=True)
     config_dict = {"configurable": {"thread_id": thread_id}}
@@ -243,10 +295,21 @@ def resume_pipeline_after_review(
     thread_id: str = "default",
 ) -> SOVState:
     """
-    Resume the pipeline after human review decisions have been applied to state.
+    Resume the paused pipeline after human review decisions have been applied
+    to state. Writes the reviewed state into the thread's checkpoint, then
+    continues from the interrupt (passing new input instead would restart the
+    graph from discovery). Returns the state at the next stop: the completed
+    export, or human_review again if required decisions are still pending.
     """
     graph = build_graph(use_checkpointing=True)
     config_dict = {"configurable": {"thread_id": thread_id}}
 
-    result = graph.invoke(_state_to_dict(state_with_decisions), config=config_dict)
+    if not graph.get_state(config_dict).next:
+        raise RuntimeError(
+            f"No paused pipeline found for thread '{thread_id}'. "
+            "Run run_pipeline_to_review first."
+        )
+
+    graph.update_state(config_dict, _state_to_dict(state_with_decisions))
+    result = graph.invoke(None, config=config_dict)
     return _dict_to_state(result)

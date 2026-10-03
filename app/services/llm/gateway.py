@@ -1,7 +1,8 @@
 """
 LLM Gateway: provider-agnostic interface.
-Primary: Groq Llama 3.3 70B
-Fallback: Ollama local model
+The provider set in LLM_PROVIDER (ollama, groq or gemini) is tried first, then
+the others that are configured: Groq/Gemini need an API key, Ollama needs to be
+the chosen provider or have OLLAMA_BASE_URL set explicitly.
 """
 
 from __future__ import annotations
@@ -149,6 +150,8 @@ class LLMGateway:
         Prioritizes the provider set in LLM_PROVIDER ('ollama', 'groq', or 'gemini').
         """
         provider = (self.config.LLM_PROVIDER or "ollama").lower()
+        if provider in self.config.LLM_DISABLED_VALUES:
+            return None  # deterministic-only mode
         if provider == "ollama":
             order = ["ollama", "groq", "gemini"]
         elif provider == "gemini":
@@ -157,7 +160,9 @@ class LLMGateway:
             order = ["groq", "ollama", "gemini"]
 
         for prov in order:
-            if prov == "ollama" and (self.config.OLLAMA_BASE_URL or provider == "ollama"):
+            # Ollama only when chosen as provider or explicitly configured;
+            # otherwise every failed cloud call would also wait on localhost.
+            if prov == "ollama" and (provider == "ollama" or self.config.OLLAMA_CONFIGURED):
                 try:
                     res = self._call_ollama(messages, temperature, json_mode=json_mode)
                     if res:

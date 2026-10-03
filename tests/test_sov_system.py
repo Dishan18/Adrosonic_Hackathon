@@ -974,3 +974,332 @@ class TestMalformedInputHandling:
         result = extract_data_frame(df, header_row=0)
         # Blank rows should be dropped
         assert len(result) < 3  # only 1 data row + blank dropped
+
+
+# ---------------------------------------------------------------------------
+# Real-world regressions (from SOV_B4ID / SOV_K4T9 / SOV_Q8B3)
+# ---------------------------------------------------------------------------
+
+def _write_xlsx(path, sheets):
+    import openpyxl
+    wb = openpyxl.Workbook()
+    wb.remove(wb.active)
+    for name, rows in sheets.items():
+        ws = wb.create_sheet(name)
+        for r in rows:
+            ws.append(r)
+    wb.save(path)
+    return str(path)
+
+
+def _run_all_approved(path):
+    from app.orchestration.state import create_initial_state
+    from app.agents.sheet_discovery import run_sheet_discovery
+    from app.agents.schema_mapping import run_schema_mapping
+    from app.agents.quality_reasoning import run_quality_reasoning
+    from app.agents.transformation import run_transformation
+    from app.schemas.state_models import RecommendationStatus
+
+    state = create_initial_state(path, Path(path).name, "xlsx", session_id="regress")
+    state = run_quality_reasoning(run_schema_mapping(run_sheet_discovery(state)))
+    state.recommendations = [
+        r.model_copy(update={"status": RecommendationStatus.APPROVED}) for r in state.recommendations
+    ]
+    state = run_transformation(state)
+    return state, pd.read_excel(state.output_path)
+
+
+class TestRealWorldRegressions:
+
+    def test_merged_footnote_not_copied_across_columns(self, tmp_path):
+        import openpyxl
+        from app.processing.workbook import unmerge_and_forward_fill, extract_data_frame
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.append(["Loc #", "Address", "Zip", "Building Value"])
+        ws.append([1, "1 Main St", 10001, 500000])
+        ws.append(["Roofs updated in 2018 to 2019"])
+        ws.merge_cells("A3:D3")
+        path = tmp_path / "note.xlsx"
+        wb.save(path)
+
+        df = extract_data_frame(unmerge_and_forward_fill(str(path), ws.title), 0)
+        assert len(df) == 1  # footnote row dropped, not spread into Zip/Building Value
+
+    def test_value_profile_veto_and_order(self, tmp_path):
+        rows = [["Account Name", "Location ID", "Bldg #", "Building", "Latitude", "Country Name"]]
+        for i in range(12):
+            rows.append(["Client A", 100 + i, i + 1, 250000 + i * 1000, 40.1 + i / 10, "Portugal"])
+        path = _write_xlsx(tmp_path / "veto.xlsx", {"Locations": rows})
+
+        from app.orchestration.state import create_initial_state
+        from app.agents.sheet_discovery import run_sheet_discovery
+        from app.agents.schema_mapping import run_schema_mapping
+        state = run_schema_mapping(run_sheet_discovery(create_initial_state(path, "veto.xlsx", "xlsx")))
+        got = {m.source_column: m.target for m in state.mappings.mappings}
+
+        assert got["Location ID"] == "Reference"        # not blocked by Account Name
+        assert got["Building"] == "Building Value"       # not "Number of Buildings"
+        assert got["Bldg #"] != "Building Value"         # building numbers are not values
+        assert got["Country Name"] == "Country"          # not blocked by Latitude
+        assert got["Latitude"] not in ("Country", "Reference")
+
+    def test_multiple_data_sheets_merged_into_one_output(self, tmp_path):
+        header_a = ["Loc #", "Address", "Zip", "2023 Building Value", "Yr Built"]
+        header_b = ["Loc #", "Address", "Zip", "Building Value", "Yr Built"]
+        sheet_a = [header_a] + [[i, f"{i} Main St", 75201, 100000 + i, 1990] for i in range(1, 8)]
+        sheet_b = [header_b] + [[i, f"{i} Oak Ave", 75202, 900000 + i, 2001] for i in range(20, 26)]
+        path = _write_xlsx(tmp_path / "multi.xlsx", {"Current": sheet_a, "Deleted": sheet_b})
+
+        state, out = _run_all_approved(path)
+        assert set(state.data_sheets) == {"Current", "Deleted"}
+        assert list(out.columns) == [
+            "Reference", "Address", "City", "State", "Zip", "County", "Country",
+            "Building Value", "Contents", "BI", "Occupancy", "Construction",
+            "Storeys", "Number of Buildings", "Year Built", "Fire Sprinklers (Y/N)", "Other",
+        ]
+        assert len(out) == 13
+        # Differently named value columns from each sheet both land in Building Value
+        assert out["Building Value"].notna().sum() == 13
+
+    def test_rejected_same_name_column_does_not_leak(self, tmp_path):
+        from app.agents.transformation import run_transformation
+        from app.schemas.state_models import ActionType, RecommendationStatus
+        rows = [["Loc #", "Address", "State", "Building Value"]]
+        rows += [[i, f"{i} Main St", "TX", 1000 * i] for i in range(1, 6)]
+        path = _write_xlsx(tmp_path / "reject.xlsx", {"SOV": rows})
+
+        from app.orchestration.state import create_initial_state
+        from app.agents.sheet_discovery import run_sheet_discovery
+        from app.agents.schema_mapping import run_schema_mapping
+        from app.agents.quality_reasoning import run_quality_reasoning
+        state = run_quality_reasoning(run_schema_mapping(run_sheet_discovery(
+            create_initial_state(path, "reject.xlsx", "xlsx", session_id="rej"))))
+        state.recommendations = [
+            r.model_copy(update={"status": RecommendationStatus.REJECTED
+                                 if r.action_type == ActionType.COLUMN_MAPPING and r.source_column == "State"
+                                 else RecommendationStatus.APPROVED})
+            for r in state.recommendations
+        ]
+        out = pd.read_excel(run_transformation(state).output_path)
+        assert out["State"].isna().all()
+
+
+class TestAuditFollowUps:
+
+    def test_to_int_does_not_truncate_fractions(self):
+        from app.processing.transformations import to_int
+        assert to_int("3") == 3
+        assert to_int("2.0") == 2
+        assert to_int(1.5) == 1.5          # left for review, not truncated to 1
+        assert pd.isna(to_int("abc"))
+
+    def test_to_zip_keeps_zips_that_lost_leading_zeros(self):
+        from app.processing.transformations import to_zip
+        assert to_zip("00802") == 802      # integer schema; exported with format 00000
+        assert to_zip(2134) == 2134
+        assert to_zip("2134.0") == 2134
+        assert pd.isna(to_zip("12"))
+
+    def test_exported_zip_shows_leading_zeros(self, tmp_path):
+        import openpyxl
+        rows = [["Loc #", "Address", "Zip", "Building Value"]]
+        # Excel stored the ZIP as a number, dropping its leading zeros
+        rows += [[i, f"{i} Main St", 802, 1000 * i] for i in range(1, 6)]
+        path = _write_xlsx(tmp_path / "zip.xlsx", {"SOV": rows})
+        state, out = _run_all_approved(path)
+        ws = openpyxl.load_workbook(state.output_path)["Cleaned_SOV"]
+        zip_cell = ws.cell(row=2, column=5)
+        assert zip_cell.value == 802 and zip_cell.number_format == "00000"
+
+    def test_llm_values_are_masked(self):
+        from app.services.llm.masking import mask_value
+        assert mask_value("2345 Reagan Street") == "9999 Reagan Street"
+        assert mask_value("$1,500,000") == "$9,999,999"
+        assert mask_value("risk@client.com") == "<email>"
+        assert len(mask_value("x" * 100)) <= 33
+
+    def test_stored_quality_score_matches_ui_score(self, sov_state_with_mappings):
+        from app.agents.quality_reasoning import run_quality_reasoning
+        from app.services.scoring.quality_score import compute_sov_quality_score
+        state = run_quality_reasoning(sov_state_with_mappings)
+        assert state.quality_report.overall_quality_score == compute_sov_quality_score(
+            state.quality_report, state.mappings
+        )
+
+    def test_ollama_not_used_as_fallback_unless_configured(self, monkeypatch):
+        from app.services.llm.gateway import LLMGateway
+        gw = LLMGateway()
+        monkeypatch.setattr(gw.config, "LLM_PROVIDER", "groq")
+        monkeypatch.setattr(gw.config, "GROQ_API_KEY", "")
+        monkeypatch.setattr(gw.config, "GEMINI_API_KEY", "")
+        monkeypatch.setattr(gw.config, "OLLAMA_CONFIGURED", False)
+        called = []
+        monkeypatch.setattr(gw, "_call_ollama", lambda *a, **k: called.append(1) or "x")
+        assert gw.complete([{"role": "user", "content": "hi"}]) is None
+        assert not called
+
+    def test_graph_pauses_resumes_and_rereasons(self, sample2_path):
+        from app.orchestration.graph import (
+            build_graph, resume_pipeline_after_review, run_pipeline_to_review,
+        )
+        from app.orchestration.state import create_initial_state
+        from app.schemas.state_models import ActionType, RecommendationStatus, WorkflowStage
+
+        thread = f"t-{uuid.uuid4().hex[:8]}"
+        cfg = {"configurable": {"thread_id": thread}}
+        state = run_pipeline_to_review(create_initial_state(sample2_path, "s2.xlsx", "xlsx"), thread)
+        assert build_graph(True).get_state(cfg).next == ("human_review",)
+
+        # Required reviews still pending → pauses again, no export
+        paused = resume_pipeline_after_review(state, thread)
+        assert paused.output_path is None
+        assert build_graph(True).get_state(cfg).next == ("human_review",)
+
+        # Reject one rec with a note, approve the rest → re-reasoning keeps decisions
+        target = next(r for r in paused.recommendations if r.action_type != ActionType.COLUMN_MAPPING)
+        paused.recommendations = [
+            r.model_copy(update={"status": RecommendationStatus.REJECTED, "rejection_note": "not needed",
+                                 "re_reason_count": 1})
+            if r.id == target.id else r.model_copy(update={"status": RecommendationStatus.APPROVED})
+            for r in paused.recommendations
+        ]
+        rereasoned = resume_pipeline_after_review(paused, thread)
+        rejected = next(r for r in rereasoned.recommendations if r.id == target.id)
+        assert rejected.status == RecommendationStatus.REJECTED and rejected.feedback_processed
+        assert sum(r.status == RecommendationStatus.APPROVED for r in rereasoned.recommendations) == \
+            len(rereasoned.recommendations) - 1
+
+        final = resume_pipeline_after_review(rereasoned, thread)
+        assert final.stage in (WorkflowStage.COMPLETE, WorkflowStage.VALIDATING)
+        assert final.output_path and Path(final.output_path).exists()
+        assert build_graph(True).get_state(cfg).next == ()
+
+    def test_rereason_keeps_each_decision_when_flags_share_a_field(self, tmp_path):
+        """Completeness and duplicate flags on the same field must keep separate decisions."""
+        from app.agents.quality_reasoning import run_quality_reasoning
+        from app.orchestration.state import create_initial_state
+        from app.agents.sheet_discovery import run_sheet_discovery
+        from app.agents.schema_mapping import run_schema_mapping
+        from app.schemas.state_models import RecommendationStatus
+
+        rows = [["Loc #", "Address", "Building Value"]]
+        rows += [["A1", "1 Main St", 1000], ["A1", "2 Main St", 2000]]
+        rows += [[None, f"{i} Oak Ave", 3000] for i in range(3, 9)]
+        path = _write_xlsx(tmp_path / "flags.xlsx", {"SOV": rows})
+        state = run_quality_reasoning(run_schema_mapping(run_sheet_discovery(
+            create_initial_state(path, "flags.xlsx", "xlsx"))))
+        ref_flags = [r for r in state.recommendations
+                     if r.target_column == "Reference" and r.operation == "flag_for_review"]
+        assert len(ref_flags) == 2
+
+        decided = {ref_flags[0].id: RecommendationStatus.APPROVED, ref_flags[1].id: RecommendationStatus.REJECTED}
+        state.recommendations = [
+            r.model_copy(update={"status": decided[r.id]}) if r.id in decided else r
+            for r in state.recommendations
+        ]
+        again = run_quality_reasoning(state)
+        after = {r.id: r.status for r in again.recommendations}
+        assert after[ref_flags[0].id] == RecommendationStatus.APPROVED
+        assert after[ref_flags[1].id] == RecommendationStatus.REJECTED
+
+
+class TestDemoRequirements:
+    """Stage 5 (re-reasoning / escalation) and C-07 (output names) of the challenge brief."""
+
+    def _state(self, tmp_path, rows):
+        from app.orchestration.state import create_initial_state
+        from app.agents.sheet_discovery import run_sheet_discovery
+        from app.agents.schema_mapping import run_schema_mapping
+        from app.agents.quality_reasoning import run_quality_reasoning
+        path = _write_xlsx(tmp_path / "demo.xlsx", {"SOV": rows})
+        return run_quality_reasoning(run_schema_mapping(run_sheet_discovery(
+            create_initial_state(path, "demo.xlsx", "xlsx"))))
+
+    def _reject(self, state, source_column, note):
+        from app.schemas.state_models import ActionType, RecommendationStatus
+        rec = next(r for r in state.recommendations
+                   if r.action_type == ActionType.COLUMN_MAPPING and r.source_column == source_column)
+        state.recommendations = [
+            r.model_copy(update={"status": RecommendationStatus.REJECTED, "rejection_note": note,
+                                 "re_reason_count": 1}) if r.id == rec.id else r
+            for r in state.recommendations
+        ]
+        return rec
+
+    def test_rejected_mapping_gets_alternative(self, tmp_path):
+        from app.agents.quality_reasoning import run_quality_reasoning
+        from app.schemas.state_models import RecommendationStatus
+        rows = [["Loc #", "Address", "Building TIV"]] + [[i, f"{i} Main St", 100000 * i] for i in range(1, 9)]
+        state = self._state(tmp_path, rows)
+        rejected = self._reject(state, "Building TIV", "these are contents values")
+        assert rejected.target_column == "Building Value"
+
+        after = run_quality_reasoning(state)
+        rec = next(r for r in after.recommendations if r.id == rejected.id)
+        assert rec.status == RecommendationStatus.PENDING
+        assert rec.target_column not in ("Building Value", "Reference", "Address")
+        assert rec.review_required and rec.feedback_processed
+        assert "these are contents values" in rec.uncertainty
+        mapping = next(m for m in after.mappings.mappings if m.source_column == "Building TIV")
+        assert mapping.target == rec.target_column
+
+    def test_rejected_mapping_without_alternative_is_escalated_and_assignable(self, tmp_path):
+        from app.agents.quality_reasoning import run_quality_reasoning
+        from app.schemas.state_models import RecommendationStatus
+        rows = [["Loc #", "Address", "Year Built"]] + [[i, f"{i} Main St", 1990 + i] for i in range(1, 9)]
+        state = self._state(tmp_path, rows)
+        rejected = self._reject(state, "Year Built", "not the build year")
+
+        after = run_quality_reasoning(state)
+        rec = next(r for r in after.recommendations if r.id == rejected.id)
+        assert rec.status == RecommendationStatus.ESCALATED
+        assert "Escalated" in rec.uncertainty
+
+        # The human assigns a target; the decision survives a later re-reasoning
+        after.recommendations = [
+            r.model_copy(update={"status": RecommendationStatus.APPROVED, "target_column": "Year Built"})
+            if r.id == rec.id else r for r in after.recommendations
+        ]
+        again = run_quality_reasoning(after)
+        kept = next(r for r in again.recommendations if r.id == rec.id)
+        assert kept.status == RecommendationStatus.APPROVED and kept.target_column == "Year Built"
+
+    def test_rejected_data_fix_is_explained(self, sample2_path):
+        from app.agents.quality_reasoning import run_quality_reasoning
+        from app.orchestration.state import create_initial_state
+        from app.agents.sheet_discovery import run_sheet_discovery
+        from app.agents.schema_mapping import run_schema_mapping
+        from app.schemas.state_models import ActionType, RecommendationStatus
+        state = run_quality_reasoning(run_schema_mapping(run_sheet_discovery(
+            create_initial_state(sample2_path, "s2.xlsx", "xlsx"))))
+        target = next(r for r in state.recommendations if r.operation == "strip_currency")
+        state.recommendations = [
+            r.model_copy(update={"status": RecommendationStatus.REJECTED,
+                                 "rejection_note": "already clean floats", "re_reason_count": 1})
+            if r.id == target.id else r for r in state.recommendations
+        ]
+        after = run_quality_reasoning(state)
+        rec = next(r for r in after.recommendations if r.id == target.id)
+        assert rec.status == RecommendationStatus.REJECTED
+        assert "already clean floats" in rec.uncertainty and "withdrawn" in rec.uncertainty
+
+    def test_deliverables_have_required_names_and_no_merged_cells(self, tmp_path):
+        import openpyxl
+        from app.config import config
+        rows = [["Loc #", "Address", "Zip", "Building Value"]]
+        rows += [[i, f"{i} Main St", 75201, 1000 * i] for i in range(1, 6)]
+        path = _write_xlsx(tmp_path / "names.xlsx", {"SOV": rows})
+        state, _ = _run_all_approved(path)
+        cleaned = Path(config.OUTPUT_DIR) / "Cleaned_SOV.xlsx"
+        audit = Path(config.OUTPUT_DIR) / "Audit_Log.xlsx"
+        assert cleaned.exists() and audit.exists()
+        assert len(openpyxl.load_workbook(cleaned)["Cleaned_SOV"].merged_cells.ranges) == 0
+
+    def test_llm_provider_none_is_deterministic_mode(self, monkeypatch):
+        from app.config import config
+        from app.services.llm.gateway import LLMGateway
+        monkeypatch.setattr(config, "LLM_PROVIDER", "none")
+        monkeypatch.setattr(config, "GROQ_API_KEY", "set-in-env-file")   # keys present must not matter
+        assert config.is_llm_available() is False
+        assert LLMGateway().complete([{"role": "user", "content": "hi"}]) is None

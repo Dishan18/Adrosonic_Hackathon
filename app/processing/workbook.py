@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import re
+from functools import lru_cache
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -96,43 +97,58 @@ def _load_excel(path: str) -> Dict[str, pd.DataFrame]:
         raise ValueError(f"Failed to read Excel file: {e}") from e
 
 
+@lru_cache(maxsize=4)
+def _parse_workbook(path: str, mtime: float) -> Dict[str, Tuple[pd.DataFrame, Tuple[str, ...], Optional[bool]]]:
+    """
+    Parse every sheet once with openpyxl: unmerge, fill, and convert to a
+    DataFrame. Cached per (path, mtime) because each agent re-reads the
+    workbook, and a multi-sheet file was otherwise loaded 2× per sheet in
+    discovery alone. Returns {sheet: (df, merged_ranges, is_active)}.
+    """
+    import openpyxl
+    wb = openpyxl.load_workbook(path, data_only=True)
+    parsed = {}
+    for ws in wb.worksheets:
+        # Unmerge: fill merged regions DOWN the first column only.
+        # Vertical merges (e.g. one Loc # spanning several building rows) carry
+        # a real value for every row. Horizontal merges are banners/notes
+        # ("2023 - 2024 Values", footnotes spanning B:AB); copying them across
+        # columns fabricates data in unrelated fields, so they stay in the
+        # top-left cell only.
+        merged_ranges = list(ws.merged_cells.ranges)
+        merged_names = tuple(str(r) for r in merged_ranges)
+        for merged in merged_ranges:
+            top_left_value = ws.cell(merged.min_row, merged.min_col).value
+            ws.unmerge_cells(str(merged))
+            for r in range(merged.min_row, merged.max_row + 1):
+                ws.cell(r, merged.min_col).value = top_left_value
+
+        # Convert to DataFrame
+        data = [list(row) for row in ws.iter_rows(values_only=True)]
+        df = pd.DataFrame(data)
+        df = df.replace("", pd.NA)
+        df = df.where(pd.notna(df), other=pd.NA)
+        parsed[ws.title] = (df, merged_names, ws is wb.active)
+    return parsed
+
+
+def _parsed_workbook(path: str):
+    return _parse_workbook(str(Path(path).resolve()), Path(path).stat().st_mtime)
+
+
 def unmerge_and_forward_fill(path: str, sheet_name: str) -> pd.DataFrame:
     """
     Load a sheet with openpyxl, unmerge cells, forward-fill merged regions,
     then return as DataFrame.
     """
     try:
-        import openpyxl
-        wb = openpyxl.load_workbook(path, data_only=True)
-        if sheet_name not in wb.sheetnames:
-            # For CSV there's only one sheet
-            ws = wb.active
+        parsed = _parsed_workbook(path)
+        if sheet_name in parsed:
+            df = parsed[sheet_name][0]
         else:
-            ws = wb[sheet_name]
-
-        # Unmerge: fill merged regions with top-left cell value
-        merged_ranges = list(ws.merged_cells.ranges)
-        for merged in merged_ranges:
-            top_left_value = ws.cell(merged.min_row, merged.min_col).value
-            ws.unmerge_cells(str(merged))
-            for row in ws.iter_rows(
-                min_row=merged.min_row,
-                max_row=merged.max_row,
-                min_col=merged.min_col,
-                max_col=merged.max_col,
-            ):
-                for cell in row:
-                    cell.value = top_left_value
-
-        # Convert to DataFrame
-        data = []
-        for row in ws.iter_rows(values_only=True):
-            data.append(list(row))
-
-        df = pd.DataFrame(data)
-        df = df.replace("", pd.NA)
-        df = df.where(pd.notna(df), other=pd.NA)
-        return df
+            # For CSV there's only one sheet
+            df = next(v[0] for v in parsed.values() if v[2])
+        return df.copy()
 
     except Exception as e:
         logger.warning("unmerge_and_forward_fill failed for '%s': %s — using plain load", sheet_name, e)
@@ -257,6 +273,25 @@ def extract_data_frame(
         logger.info("Dropping %d total/footer rows", mask.sum())
         data = data[~mask]
 
+    # Drop note/footnote rows: a single free-text cell and nothing else
+    # (e.g. "*Building values include fixed machinery & equipment"), and rows
+    # whose cells hold only whitespace.
+    # A genuine location row always carries more than one populated field.
+    def is_note_row(row: pd.Series) -> bool:
+        non_null = [v for v in row if not pd.isna(v) and str(v).strip() != ""]
+        if not non_null:
+            return True  # whitespace-only row
+        if len(non_null) != 1:
+            return False
+        v = non_null[0]
+        return isinstance(v, str) and not _looks_numeric(v)
+
+    if len(data) > 0:
+        note_mask = data.apply(is_note_row, axis=1)
+        if note_mask.any():
+            logger.info("Dropping %d note/footnote rows", note_mask.sum())
+            data = data[~note_mask]
+
     data = data.reset_index(drop=True)
     return data
 
@@ -274,15 +309,12 @@ def _looks_numeric(s: str) -> bool:
 def get_merged_cell_info(path: str, sheet_name: str) -> List[str]:
     """Return list of merged cell range strings for a sheet."""
     try:
-        import openpyxl
-        p = Path(path)
-        if p.suffix.lower() != ".xlsx":
+        if Path(path).suffix.lower() != ".xlsx":
             return []
-        wb = openpyxl.load_workbook(path, data_only=True)
-        if sheet_name not in wb.sheetnames:
+        parsed = _parsed_workbook(path)
+        if sheet_name not in parsed:
             return []
-        ws = wb[sheet_name]
-        return [str(r) for r in ws.merged_cells.ranges]
+        return list(parsed[sheet_name][1])
     except Exception:
         return []
 
@@ -321,3 +353,70 @@ def profile_dataframe(df: pd.DataFrame) -> Dict:
         "numeric_density": round(numeric_density, 4),
         "blank_row_count": blank_rows,
     }
+
+
+def load_source_data(state) -> pd.DataFrame:
+    """
+    Load the SOV data rows for a pipeline state as one DataFrame.
+
+    Every sheet Agent 1 classified as a data sheet (state.data_sheets) is
+    extracted with its own header row and the results are stacked, so a
+    workbook that splits locations across tabs produces one combined output.
+    Columns are aligned by header name. Falls back to the single primary sheet
+    for states created before data_sheets existed.
+    """
+    if state.file_meta is None:
+        return pd.DataFrame()
+    path = state.file_meta.temp_path
+
+    header_rows = {}
+    if state.sheet_manifest is not None:
+        header_rows = {s.sheet_name: s.header_row for s in state.sheet_manifest.sheets}
+    primary = state.primary_sheet_name or ""
+    names = list(state.data_sheets) or [primary]
+    specs = [(n, state.header_row if n == primary else header_rows.get(n, 0)) for n in names]
+
+    frames = []
+    column_sheets: Dict[str, List[str]] = {}
+    for name, header_row in specs:
+        df = unmerge_and_forward_fill(path, name)
+        if df.empty:
+            df = load_workbook_sheets(path).get(name, pd.DataFrame())
+        if df.empty:
+            continue
+        data = extract_data_frame(df, header_row)
+        if not data.empty:
+            frames.append(data)
+            for col in data.columns:
+                column_sheets.setdefault(col, []).append(name)
+
+    if not frames:
+        return pd.DataFrame()
+    combined = frames[0] if len(frames) == 1 else pd.concat(frames, ignore_index=True, sort=False)
+    # Sheets name the same field differently ("2023 Building Value" vs
+    # "Building Value"); mapping uses this to allow one target per sheet.
+    combined.attrs["column_sheets"] = column_sheets
+    return combined
+
+
+def rename_and_coalesce(df: pd.DataFrame, pairs: List[Tuple[str, str]]) -> pd.DataFrame:
+    """
+    Rename source columns to targets, combining several sources that map to
+    the same target (one per sheet, so their rows never overlap) into one
+    column. `pairs` is in priority order: where two sources both have a value
+    in a row, the earlier pair wins.
+    """
+    by_target: Dict[str, List[str]] = {}
+    for src, tgt in pairs:
+        if src in df.columns:
+            by_target.setdefault(tgt, []).append(src)
+
+    sources = {s for srcs in by_target.values() for s in srcs}
+    out = df[[c for c in df.columns if c not in sources]].copy()
+    for tgt, srcs in by_target.items():
+        series = df[srcs[0]]
+        for s in srcs[1:]:
+            series = series.where(series.notna(), df[s])
+        out[tgt] = series
+    out.attrs = dict(df.attrs)
+    return out

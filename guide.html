@@ -395,8 +395,8 @@
 
     <div class="quick-stats">
       <div class="stat-pill">
-        <div class="stat-val">100.0%</div>
-        <div class="stat-lbl">Mapping Accuracy</div>
+        <div class="stat-val">55 / 55</div>
+        <div class="stat-lbl">Real-File Columns Mapped</div>
       </div>
       <div class="stat-pill">
         <div class="stat-val">17 Canonical</div>
@@ -407,8 +407,8 @@
         <div class="stat-lbl">LangGraph Pipeline</div>
       </div>
       <div class="stat-pill">
-        <div class="stat-val">75 / 75</div>
-        <div class="stat-lbl">Test Suites Passed</div>
+        <div class="stat-val">92 / 92</div>
+        <div class="stat-lbl">Tests Passed</div>
       </div>
     </div>
   </header>
@@ -446,7 +446,7 @@
             <td><strong>Agent Orchestration</strong></td>
             <td><code>LangGraph</code> + <code>LangChain Core</code></td>
             <td>1.2.12 / 1.6.6</td>
-            <td>Stateful multi-agent DAG management, human approval checkpoints, and fault-tolerant agent execution.</td>
+            <td>Stateful multi-agent graph; pauses before human review and resumes from a checkpoint into the transformation.</td>
           </tr>
           <tr>
             <td><strong>User Interface</strong></td>
@@ -458,25 +458,25 @@
             <td><strong>Vector Memory Store</strong></td>
             <td><code>ChromaDB</code></td>
             <td>1.5.8</td>
-            <td>Episodic memory storing past confirmed human column mappings for instant O(1) recall on recurring broker templates.</td>
+            <td>Episodic memory storing human-approved column mappings; nearest-neighbour recall for recurring broker headers (values are still checked).</td>
           </tr>
           <tr>
             <td><strong>Dense Embeddings</strong></td>
             <td><code>Sentence-Transformers</code> (BAAI/bge-small-en-v1.5)</td>
             <td>6.1.0</td>
-            <td>Generates 384-dimensional dense semantic representations of column headers and values for semantic cosine mapping.</td>
+            <td>Generates 384-dimensional embeddings of column headers for semantic cosine matching against field names, definitions and synonyms.</td>
           </tr>
           <tr>
             <td><strong>String Similarity</strong></td>
             <td><code>RapidFuzz</code></td>
             <td>3.14.6</td>
-            <td>High-performance C++ Levenshtein string matching for exact and fuzzy synonym column resolution.</td>
+            <td>High-performance C++ string matching (<code>token_sort_ratio</code>) for fuzzy synonym column resolution.</td>
           </tr>
           <tr>
             <td><strong>Data Validation</strong></td>
             <td><code>Pandera</code></td>
             <td>0.33.1</td>
-            <td>Strict schema contract validation ensuring exactly 17 target columns, correct dtypes, and no fabricated values.</td>
+            <td>Schema contract ensuring exactly 17 target columns in order; a separate check verifies numeric/integer values in numeric fields.</td>
           </tr>
           <tr>
             <td><strong>Data Wrangling</strong></td>
@@ -486,9 +486,15 @@
           </tr>
           <tr>
             <td><strong>LLM Gateway</strong></td>
-            <td><code>Groq</code> (Llama-3.3-70b-versatile) + <code>Gemini</code> Fallback</td>
-            <td>0.37.1</td>
-            <td>Sub-second data quality reasoning, edge-case anomaly detection, and rationale generation with automated multi-model cascade.</td>
+            <td><code>Ollama</code> / <code>Groq</code> / <code>Gemini</code> (provider from <code>LLM_PROVIDER</code>)</td>
+            <td>groq 0.37.1 / httpx</td>
+            <td>Explanations for quality issues and decisions on genuinely ambiguous columns, from masked values only; falls back to the other configured providers.</td>
+          </tr>
+          <tr>
+            <td><strong>Checkpointing</strong></td>
+            <td><code>langgraph-checkpoint-sqlite</code></td>
+            <td>3.1.1</td>
+            <td>Persists the paused graph state between "Run Pipeline" and "Apply Approved Transformations" (in-memory fallback).</td>
           </tr>
         </tbody>
       </table>
@@ -498,34 +504,34 @@
   <!-- Section 2: System Architecture -->
   <section id="architecture">
     <h2>2. System Architecture</h2>
-    <p>The system follows an asynchronous, pipeline-driven architecture divided into five modular layers:</p>
+    <p>The system follows a pipeline-driven architecture divided into five modular layers:</p>
 
     <div class="card">
       <div class="step-flow">
         <div class="step-card">
           <div class="step-num">Layer 1: Ingestion</div>
           <div class="step-title">Workbook Processing</div>
-          <div class="step-desc">OpenPyXL parses multi-sheet Excel/CSV workbooks, unmerges merged title cells, and detects tabular boundaries.</div>
+          <div class="step-desc">OpenPyXL parses Excel/CSV workbooks once, unmerges cells (fill down only), drops notes and totals, and merges all data sheets.</div>
         </div>
         <div class="step-card">
           <div class="step-num">Layer 2: Intelligence</div>
           <div class="step-title">Multi-Agent Cascade</div>
-          <div class="step-desc">Discovery, 4-stage Schema Mapping, and Quality Reasoning agents generate confidence-scored proposals.</div>
+          <div class="step-desc">Discovery, cascading Schema Mapping, and Quality Reasoning agents generate confidence-scored proposals.</div>
         </div>
         <div class="step-card">
           <div class="step-num">Layer 3: Human Gate</div>
           <div class="step-title">HITL Approval Barrier</div>
-          <div class="step-desc">Streamlit review console forces underwriting validation for low-confidence or critical mapping decisions.</div>
+          <div class="step-desc">Streamlit review console: anything below 90% confidence (or a high/medium-severity issue) must be decided individually.</div>
         </div>
         <div class="step-card">
           <div class="step-num">Layer 4: Execution</div>
           <div class="step-title">Controlled Transformation</div>
-          <div class="step-desc">Deterministic transformation whitelist runs approved mutations and logs every cell change to an audit trail.</div>
+          <div class="step-desc">Deterministic transformation whitelist runs approved changes and logs every rename and operation (with rows changed) to an audit trail.</div>
         </div>
         <div class="step-card">
           <div class="step-num">Layer 5: Deliverables</div>
           <div class="step-title">Pandera & Export</div>
-          <div class="step-desc">Output verified against exact 17-column schema and exported as Cleaned_SOV.xlsx and Audit_Log.xlsx.</div>
+          <div class="step-desc">Output verified against the exact 17-column schema and field types, exported as Cleaned_SOV.xlsx and Audit_Log.xlsx.</div>
         </div>
       </div>
     </div>
@@ -543,48 +549,56 @@
       <h3>Agent 1: Sheet Discovery & Header Detection (<code>sheet_discovery.py</code>)</h3>
       <p>Commercial SOVs frequently arrive with preamble metadata, cover letters, legal disclaimers, or multi-sheet workbooks. This agent scans all sheets and locates the true tabular header row.</p>
       <ul style="margin-left: 20px; font-size: 13.5px; color: var(--text);">
-        <li><strong>Multi-Factor Sheet Scoring:</strong> Evaluates sheet name relevance, row/col density, keyword overlap against insurance terms (e.g. <em>Building, Occupancy, TIV, Address</em>), and string/numeric ratios.</li>
-        <li><strong>Header Row Search:</strong> Scans rows 0 through 15 calculating header density, string-to-number ratio, and non-empty column span to isolate the exact header row while skipping decorative titles.</li>
-        <li><strong>Classification:</strong> Categorizes sheets into <code>PRIMARY</code>, <code>SECONDARY</code>, or <code>EXCLUDED</code>.</li>
+        <li><strong>Multi-Factor Sheet Scoring:</strong> 0.35 &times; header synonym matches + 0.25 &times; data density + 0.20 &times; type consistency + 0.20 &times; row volume.</li>
+        <li><strong>Header Row Search:</strong> Scans the first 30 rows, scoring synonym matches, text ratio, fill ratio and numeric data below, to isolate the header row while skipping decorative titles.</li>
+        <li><strong>Merged Cells:</strong> Each merged value is filled down its first column only; banners and footnotes merged across columns are never copied into data fields.</li>
+        <li><strong>Classification:</strong> Categorizes sheets into <code>PRIMARY</code>, <code>SECONDARY</code>, or <code>REJECT</code>. Every PRIMARY sheet is a data sheet, and all data sheets are merged into one output (e.g. three tabs of <code>SOV_Q8B3.xlsx</code>).</li>
       </ul>
     </div>
 
     <div class="card">
       <h3>Agent 2: Cascading Schema Mapping (<code>schema_mapping.py</code>)</h3>
-      <p>Maps arbitrary source column headers to the 17 standardized canonical fields using a rigorous 4-stage cascade:</p>
+      <p>Maps arbitrary source column headers to the 17 standardized canonical fields using a cascade. Every candidate is scored as 0.45 &times; name similarity + 0.35 &times; value-profile fit + 0.20 &times; method agreement:</p>
       <div class="step-flow" style="margin-top: 14px;">
         <div class="step-card">
-          <div class="step-num">Stage 1: Memory</div>
+          <div class="step-num">Stage 0: Memory</div>
           <div class="step-title">ChromaDB Recall</div>
-          <div class="step-desc">Exact match on past human-approved mappings. (Confidence = 1.0)</div>
+          <div class="step-desc">Nearest past human-approved mapping (similarity &gt; 0.85). Stored confidence, boosted &times;1.10 (cap 0.99).</div>
         </div>
         <div class="step-card">
-          <div class="step-num">Stage 2: Exact Match</div>
+          <div class="step-num">Stage 1: Exact Match</div>
           <div class="step-title">Lexical Matching</div>
-          <div class="step-desc">Normalized string comparison against field names and curated aliases. (Confidence = 1.0)</div>
+          <div class="step-desc">Normalized header against field names and 130 curated synonyms. (Name similarity 0.97)</div>
         </div>
         <div class="step-card">
-          <div class="step-num">Stage 3: Fuzzy Match</div>
-          <div class="step-title">RapidFuzz Token Set</div>
-          <div class="step-desc">Levenshtein similarity ratio $\ge 0.82$ against target aliases. (Confidence = 0.82 - 0.95)</div>
+          <div class="step-num">Stage 2: Fuzzy Match</div>
+          <div class="step-title">RapidFuzz Token Sort</div>
+          <div class="step-desc"><code>token_sort_ratio</code> &ge; 75 against names and synonyms; top 5 candidate fields. (score &times; 0.92)</div>
         </div>
         <div class="step-card">
-          <div class="step-num">Stage 4: Semantic</div>
+          <div class="step-num">Stage 3: Semantic</div>
           <div class="step-title">BGE Small Embeddings</div>
-          <div class="step-desc">Dense cosine similarity between source column name + sample values and target field semantics. (Confidence = 0.70 - 0.90)</div>
+          <div class="step-desc">Cosine similarity of the header to field names, definitions and synonyms (&ge; 0.70); top 5 candidates. (cosine &times; 0.90)</div>
+        </div>
+        <div class="step-card">
+          <div class="step-num">Stage 4: LLM</div>
+          <div class="step-title">Ambiguous Columns Only</div>
+          <div class="step-desc">Structured JSON decision from masked samples, for columns still unresolved. Always requires review.</div>
         </div>
       </div>
-      <p style="margin-top: 14px; font-size: 13.5px;"><strong>Constraint Enforcement:</strong> A greedy 1-to-1 matching algorithm guarantees that no two input columns are assigned to the same target field.</p>
+      <p style="margin-top: 14px; font-size: 13.5px;"><strong>Value-Profile Veto:</strong> a candidate is rejected when the column's values contradict the field (fit &lt; 0.25), e.g. building numbers as Building Value or longitudes as Country.</p>
+      <p style="margin-top: 8px; font-size: 13.5px;"><strong>Constraint Enforcement:</strong> targets are claimed strongest-column-first, so a weak early match cannot block a strong later one, and each target is used once per sheet. Columns from different merged sheets may share a target.</p>
     </div>
 
     <div class="card">
       <h3>Agent 3: Data Quality Reasoning & HITL Generation (<code>quality_reasoning.py</code>)</h3>
       <p>Performs statistical profiling, anomaly detection, and human review recommendation synthesis.</p>
       <ul style="margin-left: 20px; font-size: 13.5px; color: var(--text);">
-        <li><strong>Heuristic Profiling:</strong> Detects currency formatting ($ symbols, commas), state spellings, non-integer years, invalid sprinkler codes, and empty values.</li>
-        <li><strong>Quality Scoring:</strong> Computes a standardized dataset score (0 to 100) factoring completeness, schema compliance, validity, and consistency.</li>
-        <li><strong>Automated LLM Synthesis:</strong> Leverages the Groq LLM Gateway to generate structured, human-readable underwriting explanations ("Why this change is needed", "Impact on portfolio modeling").</li>
-        <li><strong>HITL Review Requirement:</strong> If confidence is &lt; 90% or if the operation involves field renaming or schema ambiguity, <code>review_required=True</code> locks the transformation gate until confirmed.</li>
+        <li><strong>Deterministic Checks (12):</strong> completeness, currency formatting ($ symbols, commas), negative and non-numeric amounts, Year Built range, storey and building counts, sprinkler codes, state codes (incl. <code>V.I.</code>), duplicate references, ZIP format, non-integer integer fields.</li>
+        <li><strong>Quality Scoring:</strong> One 0&ndash;100 score from mapping coverage &times; confidence, completeness and issue severity, shared by the report and the UI.</li>
+        <li><strong>LLM Synthesis:</strong> The configured LLM writes human-readable explanations from issue counts and masked examples. It may lower but never raise a confidence, and cannot attach operations to column mappings.</li>
+        <li><strong>HITL Review Requirement:</strong> <code>review_required=True</code> when confidence is &lt; 90% or the issue is high/medium severity; it locks the transformation gate until decided.</li>
+        <li><strong>Re-reasoning &amp; escalation:</strong> rejecting a column mapping with a note makes Agent 3 ask the mapping cascade for the next-best target and re-propose it; if none fits, the item is escalated to a human, who can assign a target. A rejected data fix is withdrawn with an explanation. Every other decision is kept.</li>
       </ul>
     </div>
 
@@ -592,11 +606,13 @@
       <h3>Agent 4: Controlled Transformation & Pandera Validation (<code>transformation.py</code>)</h3>
       <p>Executes approved recommendations with mathematical determinism.</p>
       <ul style="margin-left: 20px; font-size: 13.5px; color: var(--text);">
-        <li><strong>Whitelisted Mutations:</strong> Strictly limited to safe operations: <code>strip_currency</code>, <code>to_float</code>, <code>to_int</code>, <code>to_year_int</code>, <code>normalize_state</code>, <code>normalize_sprinkler_code</code>, <code>column_rename</code>.</li>
-        <li><strong>Null Preservation:</strong> Missing/blank values are strictly preserved as <code>NaN</code> or empty strings—the system never synthesizes fake property values.</li>
-        <li><strong>Schema Contract:</strong> Ensures output has exactly the 17 target columns in the canonical order.</li>
-        <li><strong>Pandera Enforcement:</strong> Runs runtime DataFrame validation verifying column types and constraints.</li>
-        <li><strong>Audit Logging:</strong> Logs every cell transformation into an immutable, downloadable audit trail.</li>
+        <li><strong>Deliverables:</strong> <code>Cleaned_SOV.xlsx</code> and <code>Audit_Log.xlsx</code> (exact names) plus timestamped copies; the written file is re-checked for merged cells.</li>
+        <li><strong>Approved Renames Only:</strong> approved column mappings are applied first; a raw column that merely carries a target name (e.g. a rejected <code>State</code>) never reaches the output.</li>
+        <li><strong>Whitelisted Mutations:</strong> Strictly limited to <code>strip_currency</code>, <code>to_float</code>, <code>to_int</code>, <code>to_str</code>, <code>to_year_int</code>, <code>to_zip</code>, <code>state_to_abbrev</code>, <code>normalize_sprinkler_code</code>, <code>trim_whitespace</code>, <code>normalize_spaces</code>, <code>normalize_date</code> and <code>flag_for_review</code> (no change).</li>
+        <li><strong>Null Preservation:</strong> Missing/blank values stay empty&mdash;the system never synthesizes property values. Fractions such as 1.5 storeys are kept, not truncated.</li>
+        <li><strong>Schema Contract:</strong> Ensures output has exactly the 17 target columns in the canonical order; numeric Zip cells are formatted <code>00000</code>.</li>
+        <li><strong>Validation:</strong> Pandera checks column presence and order; a type check reports non-numeric or non-integer values in numeric fields.</li>
+        <li><strong>Audit Logging:</strong> One entry per rename and per applied operation (sample before/after and rows changed), recorded before the change is written.</li>
       </ul>
     </div>
   </section>
@@ -604,7 +620,7 @@
   <!-- Section 4: Target Schema (Rows/Columns Wanted) -->
   <section id="target-schema">
     <h2>4. Target Schema — The 17 Canonical Fields</h2>
-    <p>Every submitted SOV, regardless of whether it contains 8 columns or 40 columns, is transformed and structured into the 17 standardized commercial property underwriting fields:</p>
+    <p>Every submitted SOV, regardless of whether it contains 8 columns or 40 columns, is transformed and structured into the 17 standardized commercial property underwriting fields (exact order and names). All fields are nullable: a field with no source column stays empty.</p>
 
     <div class="table-container">
       <table>
@@ -612,8 +628,7 @@
           <tr>
             <th>#</th>
             <th>Canonical Field Name</th>
-            <th>Pandera Type</th>
-            <th>Required</th>
+            <th>Type</th>
             <th>Underwriting Purpose</th>
             <th>Transformation & Validation Rules</th>
           </tr>
@@ -623,15 +638,13 @@
             <td>1</td>
             <td><code>Reference</code></td>
             <td>String</td>
-            <td><span class="badge badge-amber">Optional</span></td>
             <td>Location / Schedule ID</td>
-            <td>Unique location identifier or policy schedule index. Whitespace trimmed.</td>
+            <td>Unique location identifier (Loc #, Location ID, Item #). Duplicates flagged for review.</td>
           </tr>
           <tr>
             <td>2</td>
             <td><code>Address</code></td>
             <td>String</td>
-            <td><span class="badge badge-green">Required</span></td>
             <td>Physical Property Address</td>
             <td>Street address for geocoding and catastrophe accumulation modeling.</td>
           </tr>
@@ -639,121 +652,106 @@
             <td>3</td>
             <td><code>City</code></td>
             <td>String</td>
-            <td><span class="badge badge-green">Required</span></td>
             <td>Municipality</td>
-            <td>City name for territorial zoning and municipal flood determination.</td>
+            <td>City name for territorial zoning.</td>
           </tr>
           <tr>
             <td>4</td>
             <td><code>State</code></td>
             <td>String</td>
-            <td><span class="badge badge-green">Required</span></td>
             <td>US State Jurisdiction</td>
-            <td>Standardized 2-letter uppercase postal abbreviation (e.g. <code>CA</code>, <code>NY</code>).</td>
+            <td>2-letter postal abbreviation (e.g. <code>CA</code>, <code>VI</code>); full or dotted names converted by <code>state_to_abbrev</code>.</td>
           </tr>
           <tr>
             <td>5</td>
             <td><code>Zip</code></td>
-            <td>String</td>
-            <td><span class="badge badge-green">Required</span></td>
+            <td>Integer</td>
             <td>Postal Code</td>
-            <td>5-digit or 9-digit postal ZIP code for CRESTA / postal hazard zoning.</td>
+            <td>5-digit ZIP (ZIP+4 truncated). 3&ndash;4 digit values that lost leading zeros are kept; exported with format <code>00000</code>.</td>
           </tr>
           <tr>
             <td>6</td>
             <td><code>County</code></td>
             <td>String</td>
-            <td><span class="badge badge-amber">Optional</span></td>
             <td>Administrative District</td>
-            <td>County jurisdiction for wind/hail tiering and local tax assessment.</td>
+            <td>County jurisdiction.</td>
           </tr>
           <tr>
             <td>7</td>
             <td><code>Country</code></td>
             <td>String</td>
-            <td><span class="badge badge-amber">Optional</span></td>
             <td>Sovereignty</td>
-            <td>Country code or name (defaults to <code>USA</code> when domestic).</td>
+            <td>Country code or name, as supplied.</td>
           </tr>
           <tr>
             <td>8</td>
             <td><code>Building Value</code></td>
-            <td>Float64</td>
-            <td><span class="badge badge-green">Required</span></td>
+            <td>Float</td>
             <td>Physical Structure Exposure</td>
-            <td>Replacement Cost Value (RCV) of building. Stripped of currency ($) and commas. $\ge 0$.</td>
+            <td>Replacement cost of the building. <code>strip_currency</code> removes $ and commas; negative and non-numeric values flagged.</td>
           </tr>
           <tr>
             <td>9</td>
             <td><code>Contents</code></td>
-            <td>Float64</td>
-            <td><span class="badge badge-amber">Optional</span></td>
+            <td>Float</td>
             <td>Business Personal Property (BPP)</td>
-            <td>Value of equipment, furniture, and inventory. Stripped of formatting. $\ge 0$.</td>
+            <td>Value of equipment, furniture, and inventory. Same monetary checks.</td>
           </tr>
           <tr>
             <td>10</td>
             <td><code>BI</code></td>
-            <td>Float64</td>
-            <td><span class="badge badge-amber">Optional</span></td>
+            <td>Float</td>
             <td>Business Interruption / Time Element</td>
-            <td>12-month gross earnings or extra expense coverage. Stripped of currency. $\ge 0$.</td>
+            <td>Business income or extra expense value. Same monetary checks.</td>
           </tr>
           <tr>
             <td>11</td>
-            <td><code>Other</code></td>
-            <td>Float64</td>
-            <td><span class="badge badge-amber">Optional</span></td>
-            <td>Ancillary Structures / Land</td>
-            <td>Fences, signs, paving, and auxiliary outbuildings. Stripped of currency. $\ge 0$.</td>
+            <td><code>Occupancy</code></td>
+            <td>String</td>
+            <td>Operations / Occupancy Type</td>
+            <td>Usage category (e.g. <em>Office, Retail, Manufacturing, Warehouse</em>) or code.</td>
           </tr>
           <tr>
             <td>12</td>
-            <td><code>TIV</code></td>
-            <td>Float64</td>
-            <td><span class="badge badge-green">Required</span></td>
-            <td>Total Insurable Value</td>
-            <td>Total exposure: Building + Contents + BI + Other. Verified for additive consistency.</td>
+            <td><code>Construction</code></td>
+            <td>String</td>
+            <td>Construction Class</td>
+            <td>Frame, Joisted Masonry, Non-Combustible, Fire Resistive, or ISO class code.</td>
           </tr>
           <tr>
             <td>13</td>
-            <td><code>Occupancy</code></td>
-            <td>String</td>
-            <td><span class="badge badge-amber">Optional</span></td>
-            <td>Operations / Occupancy Type</td>
-            <td>Commercial usage category (e.g. <em>Office, Retail, Manufacturing, Warehouse</em>).</td>
+            <td><code>Storeys</code></td>
+            <td>Integer</td>
+            <td>Building Height / Floors</td>
+            <td>Number of floors; values &lt; 1 or non-numeric flagged; fractions reported, not truncated.</td>
           </tr>
           <tr>
             <td>14</td>
-            <td><code>Construction</code></td>
-            <td>String</td>
-            <td><span class="badge badge-amber">Optional</span></td>
-            <td>ISO Construction Class</td>
-            <td>Frame, Joisted Masonry, Non-Combustible, Fire Resistive, or ISO class (1-6).</td>
+            <td><code>Number of Buildings</code></td>
+            <td>Integer</td>
+            <td>Complex Structure Count</td>
+            <td>Buildings at the location; values &lt; 1 flagged.</td>
           </tr>
           <tr>
             <td>15</td>
-            <td><code>Storeys</code></td>
-            <td>Int64 / Float</td>
-            <td><span class="badge badge-amber">Optional</span></td>
-            <td>Building Height / Floors</td>
-            <td>Number of above-ground floors for fire rescue and seismic vulnerability.</td>
+            <td><code>Year Built</code></td>
+            <td>Integer</td>
+            <td>Construction Year</td>
+            <td>4-digit year between 1700 and the current year; <code>to_year_int</code> extracts it from text such as <code>1980's</code>.</td>
           </tr>
           <tr>
             <td>16</td>
-            <td><code>Number of Buildings</code></td>
-            <td>Int64 / Float</td>
-            <td><span class="badge badge-amber">Optional</span></td>
-            <td>Complex Structure Count</td>
-            <td>Total distinct physical structures situated on the designated parcel.</td>
+            <td><code>Fire Sprinklers (Y/N)</code></td>
+            <td>String</td>
+            <td>Fire Protection</td>
+            <td>Codes <code>Y</code>, <code>N</code>, <code>Y13</code>, <code>Y(13R)</code>; Yes/No/1/0 normalized.</td>
           </tr>
           <tr>
             <td>17</td>
-            <td><code>Year Built</code></td>
-            <td>Int64 / Float</td>
-            <td><span class="badge badge-amber">Optional</span></td>
-            <td>Construction Year</td>
-            <td>4-digit integer year (e.g. <code>1998</code>). Must fall between 1700 and current year.</td>
+            <td><code>Other</code></td>
+            <td>Float</td>
+            <td>Other Insured Value</td>
+            <td>Other value not covered by Building, Contents or BI. Same monetary checks.</td>
           </tr>
         </tbody>
       </table>
@@ -763,7 +761,7 @@
   <!-- Section 5: State Models & State Machine -->
   <section id="state-models">
     <h2>5. Intermediary State Machine & Data Models</h2>
-    <p>The entire lifecycle is modeled in <code>app/schemas/state_models.py</code> via Pydantic models. State is immutable across agent steps, enabling full serialization and replayability.</p>
+    <p>The entire lifecycle is modeled in <code>app/schemas/state_models.py</code> via Pydantic models. Each agent works on a deep copy of the state, and the graph checkpoints it as plain JSON, enabling serialization and resume.</p>
 
     <div class="card">
       <h3>Workflow Stages (<code>WorkflowStage</code> Enum)</h3>
@@ -796,7 +794,7 @@
         <div class="step-card">
           <div class="step-num">Stage 5</div>
           <div class="step-title">COMPLETE</div>
-          <div class="step-desc">Transformations applied, Pandera validated, deliverables exported.</div>
+          <div class="step-desc">Transformations applied, validation passed, deliverables exported. (<code>VALIDATING</code>: exported but validation failed; <code>ERROR</code>: stopped with a message.)</div>
         </div>
       </div>
     </div>
@@ -804,23 +802,24 @@
     <div class="card">
       <h3>Core State Container: <code>SOVState</code></h3>
       <pre><code>class SOVState(BaseModel):
-    session_id: str
-    stage: WorkflowStage
-    file_meta: Optional[FileMetadata]
-    discovery_result: Optional[DiscoveryResult]
-    primary_sheet_name: Optional[str]
-    header_row_index: int = 0
-    raw_df_json: Optional[str]
-    mappings: Optional[SchemaMappingResult]
-    quality_report: Optional[QualityReport]
-    recommendations: List[Recommendation]
-    approved_recommendations: List[Recommendation]
-    transformed_df_json: Optional[str]
+    file_meta: Optional[FileMeta] = None
+    sheet_manifest: Optional[SheetManifest] = None     # Agent 1
+    header_row: int = 0
+    primary_sheet_name: Optional[str] = None
+    data_sheets: List[str] = []                        # all PRIMARY sheets, merged
+    mappings: Optional[MappingResult] = None           # Agent 2
+    quality_report: Optional[QualityReport] = None     # Agent 3
+    recommendations: List[Recommendation] = []
+    decisions: List[HumanDecision] = []                # defined, not populated
+    output_path: Optional[str] = None                  # Agent 4
+    audit_log_path: Optional[str] = None
     validation_passed: bool = False
-    validation_errors: List[str]
-    audit_log: List[AuditEntry]
-    output_path: Optional[str]
-    audit_log_path: Optional[str]</code></pre>
+    validation_errors: List[str] = []
+    stage: WorkflowStage = WorkflowStage.INIT
+    error_message: Optional[str] = None
+    audit_log: List[AuditEntry] = []
+    session_id: str = ""
+    re_reason_feedback: Optional[str] = None</code></pre>
     </div>
   </section>
 
@@ -836,34 +835,37 @@
       <div>├── <span class="tree-file">progress.md</span> <span class="tree-comment"># Development changelog, test execution records, and milestone tracking</span></div>
       <div>├── <span class="tree-file">README.md</span> <span class="tree-comment"># Repository introduction, quickstart guide, and architectural summary</span></div>
       <div>├── <span class="tree-file">guide.html</span> <span class="tree-comment"># Complete light-themed technical and architectural reference guide</span></div>
+      <div>├── <span class="tree-file">algo.html</span> <span class="tree-comment"># Algorithms, formulas and complexity of every agent</span></div>
+      <div>├── <span class="tree-file">hld.md</span> / <span class="tree-file">lld.md</span> <span class="tree-comment"># High-level and low-level design documents</span></div>
       <div>├── <span class="tree-folder">.streamlit/</span></div>
       <div>│   └── <span class="tree-file">config.toml</span> <span class="tree-comment"># Forced light theme configuration, base font, and background settings</span></div>
       <div>├── <span class="tree-folder">app/</span></div>
       <div>│   ├── <span class="tree-file">config.py</span> <span class="tree-comment"># Central configuration, threshold parameters, model names, and file paths</span></div>
       <div>│   ├── <span class="tree-folder">agents/</span></div>
-      <div>│   │   ├── <span class="tree-file">sheet_discovery.py</span> <span class="tree-comment"># Agent 1: Multi-sheet scanning, header isolation, table boundary detection</span></div>
-      <div>│   │   ├── <span class="tree-file">schema_mapping.py</span> <span class="tree-comment"># Agent 2: 4-stage cascading mapping (Memory, Exact, Fuzzy, Semantic)</span></div>
+      <div>│   │   ├── <span class="tree-file">sheet_discovery.py</span> <span class="tree-comment"># Agent 1: Multi-sheet scanning, header isolation, data-sheet selection</span></div>
+      <div>│   │   ├── <span class="tree-file">schema_mapping.py</span> <span class="tree-comment"># Agent 2: Cascade (Memory, Exact, Fuzzy, Semantic, LLM), value veto, 1:1 assignment</span></div>
       <div>│   │   ├── <span class="tree-file">quality_reasoning.py</span> <span class="tree-comment"># Agent 3: Statistical profiling, anomaly detection, LLM reasoning synthesis</span></div>
       <div>│   │   └── <span class="tree-file">transformation.py</span> <span class="tree-comment"># Agent 4: Deterministic mutation whitelist execution & Pandera validation</span></div>
       <div>│   ├── <span class="tree-folder">audit/</span></div>
       <div>│   │   └── <span class="tree-file">logger.py</span> <span class="tree-comment"># Immutable audit logger writing detailed before/after values to Audit_Log.xlsx</span></div>
       <div>│   ├── <span class="tree-folder">orchestration/</span></div>
-      <div>│   │   ├── <span class="tree-file">graph.py</span> <span class="tree-comment"># LangGraph multi-agent DAG builder with HITL interrupt checkpoints</span></div>
+      <div>│   │   ├── <span class="tree-file">graph.py</span> <span class="tree-comment"># LangGraph graph: run to review, pause, resume into transformation</span></div>
       <div>│   │   └── <span class="tree-file">state.py</span> <span class="tree-comment"># Initial state constructor and state transition helper functions</span></div>
       <div>│   ├── <span class="tree-folder">processing/</span></div>
-      <div>│   │   ├── <span class="tree-file">workbook.py</span> <span class="tree-comment"># OpenPyXL merged-cell unmerger, title unbundling, and Excel parsing</span></div>
+      <div>│   │   ├── <span class="tree-file">workbook.py</span> <span class="tree-comment"># Cached Excel parsing, fill-down unmerging, note/total filtering, multi-sheet merge</span></div>
       <div>│   │   ├── <span class="tree-file">profiling.py</span> <span class="tree-comment"># Column data profiler detecting patterns, null rates, and type inferences</span></div>
-      <div>│   │   ├── <span class="tree-file">transformations.py</span> <span class="tree-comment"># Pure whitelisted transformer functions (strip_currency, normalize_state, etc.)</span></div>
-      <div>│   │   └── <span class="tree-file">validation.py</span> <span class="tree-comment"># Pandera Schema definition and strict runtime DataFrame validator</span></div>
+      <div>│   │   ├── <span class="tree-file">transformations.py</span> <span class="tree-comment"># Pure whitelisted transformer functions (strip_currency, state_to_abbrev, etc.)</span></div>
+      <div>│   │   └── <span class="tree-file">validation.py</span> <span class="tree-comment"># Pandera schema, numeric type checks, 17-column ordering</span></div>
       <div>│   ├── <span class="tree-folder">schemas/</span></div>
       <div>│   │   ├── <span class="tree-file">target_schema.py</span> <span class="tree-comment"># The 17 canonical target fields, standard aliases, and default types</span></div>
       <div>│   │   ├── <span class="tree-file">state_models.py</span> <span class="tree-comment"># Comprehensive Pydantic models for SOVState, Recommendations, and Stages</span></div>
-      <div>│   │   └── <span class="tree-file">recommendations.py</span> <span class="tree-comment"># Recommendation factory functions for mappings, corrections, and flags</span></div>
+      <div>│   │   └── <span class="tree-file">recommendations.py</span> <span class="tree-comment"># Pydantic schemas for structured LLM outputs</span></div>
       <div>│   ├── <span class="tree-folder">services/</span></div>
       <div>│   │   ├── <span class="tree-folder">embeddings/</span></div>
-      <div>│   │   │   └── <span class="tree-file">encoder.py</span> <span class="tree-comment"># BAAI/bge-small-en-v1.5 dense encoder singleton with lru_cache</span></div>
+      <div>│   │   │   └── <span class="tree-file">encoder.py</span> <span class="tree-comment"># BAAI/bge-small-en-v1.5 dense encoder singleton</span></div>
       <div>│   │   ├── <span class="tree-folder">llm/</span></div>
-      <div>│   │   │   └── <span class="tree-file">gateway.py</span> <span class="tree-comment"># Groq + Gemini LLM Gateway with multi-model automatic fallback</span></div>
+      <div>│   │   │   ├── <span class="tree-file">gateway.py</span> <span class="tree-comment"># Ollama + Groq + Gemini LLM Gateway with provider fallback</span></div>
+      <div>│   │   │   └── <span class="tree-file">masking.py</span> <span class="tree-comment"># Masks values before they are sent to an LLM</span></div>
       <div>│   │   ├── <span class="tree-folder">memory/</span></div>
       <div>│   │   │   └── <span class="tree-file">chroma_store.py</span> <span class="tree-comment"># ChromaDB vector store persisting confirmed human mappings</span></div>
       <div>│   │   └── <span class="tree-folder">scoring/</span></div>
@@ -875,7 +877,8 @@
       <div>│   ├── <span class="tree-file">sample2_messy.xlsx</span> <span class="tree-comment"># Messy SOV with missing headers, currency strings, and state typos</span></div>
       <div>│   └── <span class="tree-file">sample3_multisheet.xlsx</span> <span class="tree-comment"># Complex workbook with preamble, Summary sheet, and target SOV sheet</span></div>
       <div>└── <span class="tree-folder">tests/</span></div>
-      <div>    └── <span class="tree-file">test_sov_system.py</span> <span class="tree-comment"># 75 comprehensive pytest unit and integration regression test suites</span></div>
+      <div>    ├── <span class="tree-file">conftest.py</span> <span class="tree-comment"># Points ChromaDB, outputs and checkpoints at a temp dir during tests</span></div>
+      <div>    └── <span class="tree-file">test_sov_system.py</span> <span class="tree-comment"># 92 pytest unit, integration and real-file regression tests</span></div>
     </div>
   </section>
 
@@ -905,7 +908,7 @@
       <h3>C. High-Performance Caching & Cost Optimization</h3>
       <ul style="margin-left: 20px; font-size: 13.5px; color: var(--text);">
         <li><strong>Exact Header Redis Cache:</strong> Cache MD5 hashes of row-0 headers. If an identical broker spreadsheet layout is processed again, retrieve 100% of mappings in &lt; 5ms with zero LLM API or embedding costs.</li>
-        <li><strong>Selective LLM Invocation:</strong> Retain the current design where 90%+ of mappings are solved deterministically via Memory, RapidFuzz, and Cosine similarity. Only route unresolved anomalies or edge-case occupancy reclassification to the LLM Gateway.</li>
+        <li><strong>Selective LLM Invocation:</strong> Retain the current design where mappings are solved deterministically via Memory, RapidFuzz, and Cosine similarity whenever the values agree. Only route unresolved columns to the LLM Gateway.</li>
       </ul>
     </div>
 
@@ -914,7 +917,7 @@
       <ul style="margin-left: 20px; font-size: 13.5px; color: var(--text);">
         <li><strong>S3 / Azure Blob Storage with KMS Encryption:</strong> Store uploaded raw files and finalized <code>Cleaned_SOV.xlsx</code> files in private object stores encrypted at rest via AWS KMS (AES-256).</li>
         <li><strong>Immutable Tamper-Evident Audit Trails:</strong> Export audit log entries with SHA-256 hash chains to satisfy internal model governance and external insurance regulator examinations (NAIC / Lloyd's compliance).</li>
-        <li><strong>PII Redaction:</strong> Strip individual property owner names or contact phone numbers prior to any third-party LLM inference.</li>
+        <li><strong>PII Redaction:</strong> The current masking replaces digits and e-mail addresses but keeps words; add named-entity redaction to strip owner names before any third-party LLM inference.</li>
       </ul>
     </div>
   </section>
@@ -967,29 +970,29 @@
         <p style="font-size: 12px; font-weight: 600; text-transform: uppercase; color: var(--primary); letter-spacing: 0.05em; margin-bottom: 8px;">Evaluation Target: Latency hierarchies, algorithmic efficiency, semantic false positives</p>
         <div style="font-size: 13.5px; color: var(--text); line-height: 1.55;">
           <strong>Model Answer:</strong>
-          <p style="margin-top: 6px;">Vector search is computationally heavier (~5–10ms per query) and is prone to semantic false positives on domain-specific acronyms. Our 4-tier cascade implements a strict efficiency and precision hierarchy:</p>
+          <p style="margin-top: 6px;">Vector search is computationally heavier (about 10–20 ms per header on CPU once the model is loaded, versus microseconds for a hash lookup) and is prone to semantic false positives on domain-specific acronyms. Our 4-tier cascade implements a strict efficiency and precision hierarchy:</p>
           <ul style="margin-left: 20px; margin-top: 6px;">
-            <li><strong>Tier 0 (ChromaDB Memory):</strong> Checked first. If a broker previously submitted column "Loc Bldg Identifier" and an underwriter approved it to <code>Reference</code>, vector memory returns this in &lt; 2ms with an approved memory confidence multiplier (1.10x).</li>
-            <li><strong>Tier 1 (Exact Normalized Hash):</strong> $O(1)$ hash table lookup against 17 canonical names and 80+ standard insurance synonyms. Resolves ~60% of columns in microseconds with 0.97 confidence.</li>
-            <li><strong>Tier 2 (RapidFuzz Token Sort Ratio):</strong> Handles minor typos, punctuation differences, and word re-orderings (e.g. "Values - Building" vs "Building Values"). Threshold cutoff is set at 78%.</li>
-            <li><strong>Tier 3 (Dense BGE Embeddings):</strong> Evaluates cosine similarity using <code>BAAI/bge-small-en-v1.5</code> (384 dimensions) against canonical definitions. Handles semantic synonyms like "Time Element" &harr; <code>BI</code>.</li>
-            <li><strong>Tier 4 (LLM Gateway):</strong> Invoked <em>only</em> if prior tiers fail or produce conflicting signals. The LLM receives masked sample rows and candidate targets, returning a strictly structured JSON decision.</li>
+            <li><strong>Tier 0 (ChromaDB Memory):</strong> Checked first. If a broker previously submitted column "Loc Bldg Identifier" and an underwriter approved it to <code>Reference</code>, memory returns it (similarity &gt; 0.85) with a 1.10&times; confidence multiplier, provided the column's values still fit.</li>
+            <li><strong>Tier 1 (Exact Normalized Hash):</strong> O(1) hash table lookup against 17 canonical names and 130 insurance synonyms, with 0.97 name similarity.</li>
+            <li><strong>Tier 2 (RapidFuzz Token Sort Ratio):</strong> Handles minor typos, punctuation differences, and word re-orderings (e.g. "Values - Building" vs "Building Values"). Cutoff 75 (<code>FUZZY_THRESHOLD</code> 0.75).</li>
+            <li><strong>Tier 3 (Dense BGE Embeddings):</strong> Cosine similarity using <code>BAAI/bge-small-en-v1.5</code> (384 dimensions) against canonical names, definitions and synonyms, cutoff 0.70. Handles semantic synonyms like "Time Element" &harr; <code>BI</code>. At 0.60 it also matched unrelated headers (<code>SW</code>, <code>Dept</code>), which is why the threshold was raised.</li>
+            <li><strong>Tier 4 (LLM Gateway):</strong> Invoked <em>only</em> for columns that are still unresolved. The LLM receives masked sample values and candidate targets, returning a strictly structured JSON decision that always requires review.</li>
           </ul>
         </div>
       </div>
 
       <div class="card">
-        <h4 style="font-size: 15px; font-weight: 600; color: var(--text-dark); margin-bottom: 6px;">Q4: What is the Hungarian Conflict Resolution algorithm, and why is it necessary in SOV cleansing?</h4>
-        <p style="font-size: 12px; font-weight: 600; text-transform: uppercase; color: var(--primary); letter-spacing: 0.05em; margin-bottom: 8px;">Evaluation Target: Bipartite matching, 1:1 constraints, collision prevention</p>
+        <h4 style="font-size: 15px; font-weight: 600; color: var(--text-dark); margin-bottom: 6px;">Q4: How do you enforce that each target field is filled by only one column, and why does the order of assignment matter?</h4>
+        <p style="font-size: 12px; font-weight: 600; text-transform: uppercase; color: var(--primary); letter-spacing: 0.05em; margin-bottom: 8px;">Evaluation Target: 1:1 constraints, greedy vs. optimal assignment, collision prevention</p>
         <div style="font-size: 13.5px; color: var(--text); line-height: 1.55;">
           <strong>Model Answer:</strong>
-          <p style="margin-top: 6px;">In real-world broker files, multiple raw columns frequently show high similarity to the same canonical target. For example, a workbook may contain both <code>Building Limit</code> and <code>Building Notes</code>. A naive mapper could map both to <code>Building Value</code>, corrupting the downstream underwriting feed.</p>
-          <p style="margin-top: 6px;">Our Hungarian assignment step enforces a strict <strong>1:1 injective target constraint</strong>:</p>
+          <p style="margin-top: 6px;">In real-world broker files, several raw columns often look similar to the same target. A workbook may contain both <code>Building</code> (values) and <code>Bldg.</code> (building numbers). Mapping both to <code>Building Value</code> would corrupt the underwriting feed.</p>
+          <p style="margin-top: 6px;">The first version assigned targets left to right, so a weak early match blocked a strong later one: in <code>SOV_K4T9.xlsx</code>, <code>Account Name</code> took Reference and the exact synonym <code>Location ID</code> was left unmapped. The current assignment is confidence-ordered (a greedy approximation of optimal matching, not the Hungarian algorithm):</p>
           <ul style="margin-left: 20px; margin-top: 6px;">
-            <li>Groups all source column mappings by target field.</li>
-            <li>If $|C_{\text{target}}| > 1$, evaluates their calibrated multi-modal confidence scores ($W_{\text{name}} \cdot S_{\text{name}} + W_{\text{value}} \cdot V_{\text{profile}} + W_{\text{method}} \cdot A_{\text{method}}$).</li>
-            <li>Assigns the target exclusively to the maximum-confidence column: $C^* = \arg\max_i \text{Confidence}(C_i \to T)$.</li>
-            <li>Demotes all competing columns to <code>UNRESOLVED</code> with confidence 0.0 and logs an explicit demotion rationale in the audit trail.</li>
+            <li>Pass 1 scores every column independently.</li>
+            <li>Pass 2 repeatedly commits the pending column with the highest confidence. A column whose target is already taken is re-scored without it and re-queued at its new confidence.</li>
+            <li>The constraint applies per sheet: when several tabs are merged, <code>2023 Building Value</code> on one tab and <code>Building Value</code> on another may both feed <code>Building Value</code>, because their rows never overlap.</li>
+            <li>A final safety pass demotes any remaining same-sheet duplicate to <code>UNRESOLVED</code> with the reason in its rationale.</li>
           </ul>
         </div>
       </div>
@@ -1004,7 +1007,8 @@
           <ul style="margin-left: 20px; margin-top: 6px;">
             <li>Computes numeric ratio, currency ratio, date/year patterns, 5-digit ZIP codes, and 2-letter postal codes.</li>
             <li><code>score_value_profile_fit(profile, target)</code> produces a score from 0.0 to 1.0.</li>
-            <li>If a column labeled "State" has zero 2-letter state codes and a 95% numeric ratio, its VPF for <code>State</code> collapses to 0.0. In the confidence formula ($0.45 S_{\text{name}} + 0.35 V_{\text{profile}} + 0.20 A_{\text{method}}$), this drop pulls the total confidence below the 0.50 threshold, routing the column to human review rather than silently corrupting the dataset.</li>
+            <li>VPF enters the confidence formula (0.45 &times; S<sub>name</sub> + 0.35 &times; V<sub>profile</sub> + 0.20 &times; A<sub>method</sub>), and it is also a hard veto: if a non-empty column scores below 0.25 for a field, that field is rejected however well the header matches. A column labeled "State" with no state codes and 95% numeric values therefore cannot become <code>State</code>.</li>
+            <li>Real catches: building numbers 1&ndash;6 under <code>Bldg.</code> rejected as Building Value; dollar amounts under <code>Building</code> rejected as Number of Buildings; longitudes rejected as Country.</li>
           </ul>
         </div>
       </div>
@@ -1019,13 +1023,13 @@
         <p style="font-size: 12px; font-weight: 600; text-transform: uppercase; color: var(--primary); letter-spacing: 0.05em; margin-bottom: 8px;">Evaluation Target: Low-level spreadsheet parsing, Excel object model</p>
         <div style="font-size: 13.5px; color: var(--text); line-height: 1.55;">
           <strong>Model Answer:</strong>
-          <p style="margin-top: 6px;">Standard <code>pd.read_excel()</code> fails on complex merged headers because it places the cell value in the top-left coordinate and leaves all other spanned coordinates as <code>NaN</code>. Our <code>unmerge_and_forward_fill()</code> implementation handles this cleanly:</p>
+          <p style="margin-top: 6px;">Standard <code>pd.read_excel()</code> places a merged value in the top-left cell and leaves the rest of the range empty. Our <code>unmerge_and_forward_fill()</code> implementation fills it deliberately:</p>
           <ol style="margin-left: 20px; margin-top: 6px;">
-            <li>Opens the workbook using <code>openpyxl.load_workbook(path, data_only=True)</code> to capture calculated formula results rather than raw formula text strings.</li>
+            <li>Opens the workbook once using <code>openpyxl.load_workbook(path, data_only=True)</code> to capture calculated formula results; the parse is cached per file and modification time.</li>
             <li>Extracts all range coordinates from <code>worksheet.merged_cells.ranges</code>.</li>
-            <li>For each range $(r_{\min}, c_{\min}) \dots (r_{\max}, c_{\max})$, reads the master value at $(r_{\min}, c_{\min})$.</li>
-            <li>Unmerges the range via <code>worksheet.unmerge_cells()</code> and writes the master value into every sub-cell across both rows and columns.</li>
-            <li>Passes the sanitized grid to pandas, preserving parent category names across sub-columns.</li>
+            <li>For each range, reads the master value at its top-left cell and unmerges the range via <code>worksheet.unmerge_cells()</code>.</li>
+            <li>Writes the master value <strong>down the first column</strong> of the range only. A vertically merged Loc # belongs to every row it spans; a horizontally merged banner or footnote does not belong in other columns. Copying across columns once turned the footnote "updates in 2018 to 2019" into Zip 20182 and Year Built 2018.</li>
+            <li>After the header row is applied, footnote rows (a single text cell), totals and whitespace-only rows are dropped.</li>
           </ol>
         </div>
       </div>
@@ -1039,7 +1043,7 @@
           <p style="margin-top: 6px;">Downstream profiling code called <code>series.dropna().astype(str).str.strip()</code>. Calling <code>.str</code> on a DataFrame raises <code>AttributeError</code> because <code>.str</code> is an accessor exclusive to Series.</p>
           <p style="margin-top: 6px;"><strong>The Fix:</strong></p>
           <ul style="margin-left: 20px; margin-top: 6px;">
-            <li>In <code>workbook.py::extract_data_frame()</code>, implemented automatic header deduplication during initial extraction (appending <code>_1</code>, <code>_2</code> suffixes to duplicate names).</li>
+            <li>In <code>workbook.py::extract_data_frame()</code>, implemented automatic header deduplication during initial extraction (duplicates become <code>"2024 - Increase 10% (1)"</code>, <code>"(2)"</code>, &hellip;).</li>
             <li>In <code>profiling.py::profile_column()</code> and <code>schema_mapping.py::map_column()</code>, added defensive type checks: <code>if isinstance(series, pd.DataFrame): series = series.iloc[:, 0]</code>.</li>
             <li>In <code>transformation.py</code>, disambiguated duplicate target columns by calculating non-null counts across candidate slices and preserving the slice with the highest information density.</li>
           </ul>
@@ -1059,8 +1063,8 @@
           <p style="margin-top: 6px;">The system implements a multi-provider fallback hierarchy inside <code>app/services/llm/gateway.py</code>:</p>
           <ul style="margin-left: 20px; margin-top: 6px;">
             <li><strong>Gateway Client Abstraction:</strong> Code interacts with <code>get_llm()</code> rather than calling provider-specific SDKs directly.</li>
-            <li><strong>Automatic Local Failover:</strong> If the primary provider (e.g. Groq) encounters an HTTP 429 (Rate Limit Exceeded) or connection timeout, the gateway falls back immediately to local Ollama running <code>mistral:latest</code> on port 11434.</li>
-            <li><strong>Safe Degradation:</strong> If local Ollama is also unavailable or times out, the pipeline <em>does not crash</em>. It gracefully demotes unresolved columns to <code>UNRESOLVED</code>, flags them for human review, and continues executing all deterministic mappings and Pandera validations.</li>
+            <li><strong>Provider Failover:</strong> The provider in <code>LLM_PROVIDER</code> is tried first. On a rate limit (HTTP 429), timeout or connection error, the gateway tries other Groq models, then the other configured providers: Groq/Gemini only with an API key, local Ollama only when it is the provider or <code>OLLAMA_BASE_URL</code> is set explicitly.</li>
+            <li><strong>Safe Degradation:</strong> If every provider fails, the pipeline <em>does not crash</em>. Unresolved columns stay <code>UNRESOLVED</code> and require human review; all deterministic mappings, quality checks and validations still run.</li>
           </ul>
         </div>
       </div>
@@ -1093,7 +1097,7 @@
           <p style="margin-top: 6px;">Validating large tables (e.g. 50,000 rows &times; 17 columns = 850,000 cells) by instantiating individual Pydantic model objects per row is computationally expensive, consuming significant memory and taking tens of seconds in Python loops.</p>
           <p style="margin-top: 6px;"><strong>Pandera</strong> validates the entire DataFrame as a single vectorized columnar structure:</p>
           <ul style="margin-left: 20px; margin-top: 6px;">
-            <li><strong>Vectorized Speed:</strong> Executes column-level null checks, dtype verifications, and ordering constraints in milliseconds using optimized C/Cython routines.</li>
+            <li><strong>Vectorized Speed:</strong> Executes column-level presence, nullability and ordering constraints in milliseconds. (Our schema declares no dtypes because cleaned columns can legitimately hold nulls and mixed raw values; a separate vectorizable check verifies that numeric fields hold numbers and integer fields whole numbers.)</li>
             <li><strong>Lazy Error Aggregation:</strong> Using <code>schema.validate(df, lazy=True)</code>, Pandera does not stop at the first error; it collects all schema violations across all columns in a single pass, providing a comprehensive diagnostic report to the user.</li>
             <li><strong>Strict Invariance:</strong> Pandera enforces exact column counts (17), exact column names, and strict column ordering in a single declarative block before any file is serialized to disk.</li>
           </ul>

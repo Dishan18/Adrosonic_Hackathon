@@ -1,55 +1,68 @@
 # Low-Level Design (LLD)
 ## Agentic Statement of Values (SOV) Intelligence & Cleansing System
 
-**Document Version:** 1.0.0  
+**Document Version:** 1.1.0 (updated 2026-10-03; definitions match the code in `app/`)  
 **Target Architecture:** LangGraph State Machine, Pydantic V2, Pandera, OpenPyXL, RapidFuzz, Sentence-Transformers, ChromaDB  
 
 ---
 
 ## 1. Class & Data Contract Specifications
 
-The system is strictly typed using Pydantic V2 and Pandera. Data moves across agent nodes inside an immutable, deeply copyable state container (`SOVState`).
+The system is typed with Pydantic V2. Each agent node takes a deep copy of the shared `SOVState`, writes only its own fields and returns the new state. Inside the LangGraph graph the state travels as a JSON-mode dict (`model_dump(mode="json")`), so checkpoints contain only plain values.
 
-### 1.1 State Machine Container (`SOVState`)
+### 1.1 State Machine Container (`SOVState`, `app/schemas/state_models.py`)
 
 ```python
 class WorkflowStage(str, Enum):
-    INITIALIZED = "initialized"
+    INIT = "init"
     DISCOVERING = "discovering"
+    DISCOVERED = "discovered"
     MAPPING = "mapping"
-    QUALITY_CHECKING = "quality_checking"
-    REVIEWING = "reviewing"
+    MAPPED = "mapped"
+    ASSESSING = "assessing"
+    ASSESSED = "assessed"
+    HUMAN_REVIEW = "human_review"
     TRANSFORMING = "transforming"
-    VALIDATING = "validating"
-    COMPLETE = "complete"
+    VALIDATING = "validating"      # export written, validation failed
+    COMPLETE = "complete"          # export written, validation passed
     ERROR = "error"
 
 class SOVState(BaseModel):
-    session_id: str
-    stage: WorkflowStage = WorkflowStage.INITIALIZED
-    file_meta: Optional[FileMetadata] = None
+    file_meta: Optional[FileMeta] = None
+    # Agent 1
     sheet_manifest: Optional[SheetManifest] = None
+    header_row: int = 0                       # header row of the primary sheet (0-indexed)
     primary_sheet_name: Optional[str] = None
-    header_row: int = 0
+    data_sheets: List[str] = []               # every PRIMARY sheet, merged into the output
+    # Agent 2
     mappings: Optional[MappingResult] = None
+    # Agent 3
     quality_report: Optional[QualityReport] = None
-    recommendations: List[Recommendation] = Field(default_factory=list)
-    audit_log: List[AuditEntry] = Field(default_factory=list)
+    recommendations: List[Recommendation] = []
+    # Human decisions: defined but not populated; review state lives on each Recommendation
+    decisions: List[HumanDecision] = []
+    # Agent 4
     output_path: Optional[str] = None
     audit_log_path: Optional[str] = None
     validation_passed: bool = False
-    validation_errors: List[str] = Field(default_factory=list)
-    quality_score: float = 0.0
+    validation_errors: List[str] = []
+    # Orchestration
+    stage: WorkflowStage = WorkflowStage.INIT
     error_message: Optional[str] = None
+    audit_log: List[AuditEntry] = []
+    session_id: str = ""
+    re_reason_feedback: Optional[str] = None  # reviewer notes passed to Agent 3
+
+    model_config = {"use_enum_values": True}
 ```
 
 ### 1.2 Sheet Intelligence Schemas
 
 ```python
 class SheetClassification(str, Enum):
-    PRIMARY = "primary"        # Active SOV table containing insured risks
-    SECONDARY = "secondary"    # Additional location data, notes, or subsidiary schedule
-    REJECT = "reject"          # Cover pages, pivot summaries, charts, empty tabs
+    PRIMARY = "Primary"        # SOV location data (all PRIMARY sheets are merged)
+    SECONDARY = "Secondary"    # Some SOV signal, not used as data
+    REJECT = "Reject"          # Cover pages, disclaimers, empty tabs
 
 class SheetProfile(BaseModel):
     sheet_name: str
@@ -66,6 +79,7 @@ class SheetProfile(BaseModel):
     blank_row_count: int
     total_row_count: int
     metadata_row_count: int
+    score: float = 0.0
 
 class SheetDiscoveryResult(BaseModel):
     sheet_name: str
@@ -74,46 +88,56 @@ class SheetDiscoveryResult(BaseModel):
     confidence: float
     reasoning: List[str]
     profile: SheetProfile
-    issues: List[str]
+    issues: List[str] = []
 ```
 
 ### 1.3 Mapping & Recommendation Schemas
 
 ```python
 class MappingMethod(str, Enum):
+    MEMORY = "memory"
     EXACT = "exact"
     FUZZY = "fuzzy"
     SEMANTIC = "semantic"
-    MEMORY = "memory"
     LLM = "llm"
     UNRESOLVED = "unresolved"
 
 class ColumnMapping(BaseModel):
     source_column: str
-    target: Optional[str]
+    target: Optional[str]              # None if unmapped
     confidence: float
     method: MappingMethod
     rationale: str
-    evidence: List[str]
-    review_required: bool
-    value_profile_fit: float
-    name_similarity: float
-    method_agreement: float
+    evidence: List[str] = []           # includes the reasons for any vetoed candidates
+    review_required: bool = False      # confidence < HIGH_CONFIDENCE_THRESHOLD
+    value_profile_fit: float = 0.0
+    name_similarity: float = 0.0
+    method_agreement: float = 0.0
+
+class RecommendationStatus(str, Enum):
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    ESCALATED = "escalated"            # rejected mapping with no alternative: a human decides
+    SKIPPED = "skipped"                # defined, not currently assigned
 
 class Recommendation(BaseModel):
-    id: str                            # e.g., REC-A4F12B89
+    id: str                            # MAP-XXXXXXXX (mapping) / REC-XXXXXXXX (data quality)
     action_type: ActionType            # COLUMN_MAPPING | STANDARDISATION | DATA_CORRECTION | FLAG_FOR_REVIEW
     source_column: str
     target_column: str
     operation: str                     # Whitelisted function name
-    before_example: Optional[str]
-    after_example: Optional[str]
+    before_example: str
+    after_example: str
     rationale: str
     confidence: float
     uncertainty: str = ""
     affected_rows: int = 0
-    affected_row_indices: List[int] = Field(default_factory=list)
-    status: RecommendationStatus = RecommendationStatus.PENDING # PENDING | APPROVED | REJECTED | OVERRIDDEN
+    affected_row_indices: List[int] = []
+    status: RecommendationStatus = RecommendationStatus.PENDING
+    rejection_note: str = ""
+    re_reason_count: int = 0           # incremented on each rejection
+    feedback_processed: bool = False   # True once Agent 3 re-reasoned on rejection_note
     issue_id: Optional[str] = None
     review_required: bool = False
 ```
@@ -122,21 +146,30 @@ class Recommendation(BaseModel):
 
 ## 2. Module & Agent Detailed Specifications
 
+### 2.0 Workbook Ingestion (`app.processing.workbook`)
+
+1. **Parse once:** `_parse_workbook(path, mtime)` loads the workbook with `openpyxl.load_workbook(data_only=True)` and converts every sheet to a DataFrame. It is `lru_cache`d per (resolved path, modification time), so the agents share one parse.
+2. **Unmerge (fill down):** for each merged range the top-left value is written into the first column of every row of the range. Horizontal spans (banners such as "2023 - 2024 Values", footnotes merged across `B:AB`) are therefore *not* copied into other columns.
+3. **Extract (`extract_data_frame`):** the header row becomes the column names (line breaks collapsed to spaces, blank names → `_col_{i}`, duplicates suffixed ` (1)`, ` (2)` …). Then these rows are dropped: completely blank rows; rows containing a cell equal to `total`, `grand total`, `subtotal`, `sum` or `footer`; note rows (exactly one non-empty cell, and it is non-numeric text); whitespace-only rows.
+4. **Multi-sheet load (`load_source_data(state)`):** every sheet in `state.data_sheets` is extracted with its own header row and the frames are concatenated (columns aligned by name). `DataFrame.attrs["column_sheets"]` records which sheet(s) each column came from.
+5. **`rename_and_coalesce(df, pairs)`:** renames source columns to targets; when several sources map to one target (one per sheet) they are combined into one column, earlier (higher-confidence) pairs winning where both have a value.
+
 ### 2.1 Agent 1: Sheet Intelligence & Discovery (`app.agents.sheet_discovery`)
 
 #### Responsibilities:
-1. Load all workbook worksheets with `openpyxl`.
-2. Detect and unmerge merged ranges (`openpyxl.worksheet.worksheet.Worksheet.merged_cells`), forward-filling categorical headers across merged spans.
-3. Strip leading title banners, empty preamble rows, and company disclaimers.
-4. Scan the first $M = 30$ rows to locate the optimal header row index.
-5. Compute composite structural confidence and classify each sheet.
+1. Load all worksheets (`load_workbook_sheets`) and the unmerged view of each.
+2. Scan the first $M = 30$ rows to locate the header row (`_find_best_header`).
+3. Compute a composite structural score and classify each sheet.
+4. Pick the best PRIMARY sheet as `primary_sheet_name`; set `data_sheets` = that sheet followed by every other PRIMARY sheet.
 
 #### Algorithmic Formulation:
-For candidate header row $i \in [0, \min(30, N_{\text{rows}})]$:
+For candidate header row $i \in [0, \min(30, N_{\text{rows}}))$:
 
 $$\text{TextRatio}(i) = \frac{\sum_{c \in \text{non-null}} \mathbb{I}[c \text{ is text and not numeric}]}{|\text{non-null}|}$$
 
 $$\text{HeaderMatch}(i) = \frac{\sum_{c \in \text{non-null}} \mathbb{I}[\text{norm}(c) \in \text{SynonymSet}]}{\max(|\text{non-null}|, 1)}$$
+
+$$\text{FillRatio}(i) = \frac{|\text{non-null}|}{\max(|\text{row}|, 1)}$$
 
 $$\text{DataBelow}(i) = \frac{\sum_{v \in \text{row}_{i+1}} \mathbb{I}[v \text{ is numeric}]}{\max(|\text{row}_{i+1}|, 1)}$$
 
@@ -148,7 +181,7 @@ $$\text{Score}_{\text{sheet}} = 0.35 \cdot S_{\text{header}} + 0.25 \cdot D_{\te
 Where:
 - $S_{\text{header}} = \min\left(1.0, \frac{\text{synonym\_matches}}{17} \times 3.0\right)$
 - $D_{\text{density}} = \text{non-null cell ratio}$
-- $C_{\text{type}} = \text{fraction of columns exhibiting homogeneous types (} >80\% \text{ numeric or } >80\% \text{ string)}$
+- $C_{\text{type}} = \text{fraction of columns (first 200 data rows) that are} >80\% \text{ numeric or} <20\% \text{ numeric}$
 - $V_{\text{rows}} = \min(1.0, \frac{\text{rows below header}}{100})$
 
 Classification Logic:
@@ -156,45 +189,41 @@ Classification Logic:
 - Else if $\text{Score}_{\text{sheet}} \ge 0.25$ or $\text{matches} \ge 1 \implies \mathbf{SECONDARY}$
 - Else $\implies \mathbf{REJECT}$
 
+Hidden sheets are scored like any other sheet.
+
 ---
 
 ### 2.2 Agent 2: Schema Mapping Agent (`app.agents.schema_mapping`)
 
-#### Multi-Tier Cascade Architecture:
+#### Per-column cascade (`map_column`):
 
 ```
-Source Column String & Series
+Source Column Name & Values  ──►  value profile (profile_column)
             │
             ▼
-┌─────────────────────────┐  Hit
-│ Stage 0: Vector Memory  ├──────► Conf = min(0.99, match_conf * 1.1)
+┌─────────────────────────┐  hit, values agree
+│ Stage 0: Vector Memory  ├──────► name_sim = min(stored_conf, 0.99), agreement 1.0, ×1.10 boost
 └───────────┬─────────────┘
-            │ Miss
+            │ miss / vetoed
             ▼
-┌─────────────────────────┐  Hit
-│ Stage 1: Exact Synonym  ├──────► Conf = 0.97
+┌─────────────────────────┐  hit, values agree
+│ Stage 1: Exact Synonym  ├──────► name_sim = 0.97, agreement 1.0
 └───────────┬─────────────┘
-            │ Miss
+            │ miss / vetoed
             ▼
 ┌─────────────────────────┐
-│ Stage 2: RapidFuzz      │ Token Sort Ratio (cutoff = 78%)
+│ Stage 2: RapidFuzz      │ token_sort_ratio ≥ FUZZY_THRESHOLD×100 (75); top 5 distinct targets
+├─────────────────────────┤
+│ Stage 3: BGE Embeddings │ cosine ≥ SEMANTIC_THRESHOLD (0.70); top 5 distinct targets
 └───────────┬─────────────┘
-            │
-┌───────────▼─────────────┐
-│ Stage 3: BGE Embeddings │ Dense Cosine Sim (cutoff = 0.75)
-└───────────┬─────────────┘
-            │
-            ├─► Both Agree ──► High Confidence Consensus
-            ├─► Disagree   ──► Take higher score (agreement = 0.60)
+            │ every candidate target: veto check, then confidence; best ≥ 0.50 wins
             ▼
-┌─────────────────────────┐  Ambiguous / Low Signal (< 0.50)
-│ Stage 4: LLM Gateway    ├──────► Structured JSON decision (Mistral/Groq)
-└───────────┬─────────────┘
-            ▼
-┌─────────────────────────┐
-│ Hungarian Assignment    │ 1:1 Target Constraint Resolution
+┌─────────────────────────┐  still unresolved (pass 2 only)
+│ Stage 4: LLM Gateway    ├──────► structured JSON decision among fields with value fit > 0.35
 └─────────────────────────┘
 ```
+
+Stage 0 uses `get_exact_memory_mapping`: Chroma query, similarity $= 1 - d/2$ (Chroma's default L2 distance), hit if similarity $> 0.85$.
 
 #### Confidence Calibration Formula:
 For a candidate mapping to canonical field $T$:
@@ -202,16 +231,34 @@ For a candidate mapping to canonical field $T$:
 $$\text{Confidence} = 0.45 \cdot S_{\text{name}} + 0.35 \cdot V_{\text{profile}} + 0.20 \cdot A_{\text{method}}$$
 
 Where:
-- $S_{\text{name}}$: Name similarity from exact (1.0), fuzzy ($0.92 \times \frac{\text{ratio}}{100}$), semantic ($0.90 \times \cos(\vec{q}, \vec{d})$), or LLM ($0.85 \times \text{conf}_{\text{llm}}$).
-- $V_{\text{profile}}$: Value-Profile Fit score ($0.0 \dots 1.0$) generated by `score_value_profile_fit(profile, T)`.
-- $A_{\text{method}}$: Inter-stage agreement ($1.0$ if memory/exact or fuzzy+semantic agree; $0.8$ if single heuristic matches; $0.6$ on heuristic clash).
-- Memory Boost: If from approved memory, $\text{Confidence} \leftarrow \min(0.99, \text{Confidence} \times 1.10)$.
+- $S_{\text{name}}$: exact $0.97$; fuzzy $0.92 \times \frac{\text{ratio}}{100}$; semantic $0.90 \times \cos(\vec{q}, \vec{d})$; LLM $0.85 \times \text{conf}_{\text{llm}}$; memory $\min(\text{stored conf}, 0.99)$. A target found by both fuzzy and semantic uses the average.
+- $V_{\text{profile}}$: Value-Profile Fit from `score_value_profile_fit(profile, T)` (section 2.2.1). An **empty** column scores a neutral $0.5$ here, so a correctly named but empty column is not out-ranked by weak matches.
+- $A_{\text{method}}$: $1.0$ for memory, exact, or fuzzy+semantic agreement; $0.7$ for a target found by only one of fuzzy/semantic, and for LLM.
+- Memory Boost: $\text{Confidence} \leftarrow \min(0.99, \text{Confidence} \times 1.10)$.
+- `review_required = Confidence < HIGH_CONFIDENCE_THRESHOLD (0.90)`; LLM mappings always require review.
 
-#### 1:1 Target Uniqueness (Hungarian Assignment):
-If multiple source columns $C_1, C_2, \dots C_k$ target the same canonical field $T$:
-1. Select $C^* = \arg\max_i \text{Confidence}(C_i \to T)$.
-2. Assign $C^* \to T$.
-3. Demote all other $C_{j \ne *} \to \text{UNRESOLVED}$ with $\text{Confidence} = 0.0$ and clear explanation in rationale.
+#### 2.2.1 Value-Profile Fit and Veto
+
+| Target | Fit |
+|--------|-----|
+| Building Value, Contents, BI, Other | $0.6 \cdot \text{monetary} + 0.4 \cdot \text{numeric}$; halved if any value is negative (monetary = numeric with $|v| \ge 100$) |
+| Year Built | year ratio (1700 … current year + 1); $+0.3$ if > 80% numeric and min/max in range |
+| Zip | $z = \max(\text{zip5}, 0.6 \cdot \text{zip3–4})$; $z$ if $z > 0.5$, else $z \cdot (1 - \min(0.5, \text{monetary}))$. 3–4 digit integers are ZIPs that lost leading zeros |
+| State | ratio of US state/territory codes (dots and spaces ignored: `V.I.` → `VI`) |
+| Fire Sprinklers (Y/N) | $\min(1, \text{sprinkler codes} + 0.3 \cdot \text{Y/N})$ |
+| Storeys, Number of Buildings | integer 1–200 ratio, $+0.2$ if > 80% numeric |
+| Reference | $0.2$ if > 80% numeric with fractions (coordinates, amounts); else $0.5 + 0.5 \cdot \text{unique ratio}$ |
+| Address | address-pattern ratio; at least $0.3$ for text columns (< 20% numeric) |
+| City, County, Country | $0$ if > 80% numeric; else $0.7 \cdot (1-\text{numeric}) + 0.3 \cdot (1-\text{monetary})$ |
+| Occupancy, Construction | $0.7 \cdot (1-\text{numeric}) + 0.3 \cdot (1-\text{monetary})$ (numeric codes allowed) |
+
+**Veto:** a candidate (memory, exact, fuzzy, semantic or LLM) is rejected when the column has data and $V_{\text{profile}} < 0.25$ (`MIN_PROFILE_FIT`). Examples from real files: building numbers 1–6 as `Building Value`, $ amounts as `Number of Buildings`, longitudes as `Country`. The reason is kept in `evidence`.
+
+#### 1:1 Target Uniqueness (`run_schema_mapping`)
+1. **Pass 1:** score every named column independently (no LLM).
+2. **Pass 2:** repeatedly commit the pending column with the highest current confidence. If its target is already claimed by a column from an overlapping sheet, re-score it with that target excluded and put it back in the queue at its new confidence. A column still unresolved at its turn gets the LLM stage.
+3. Targets are unique **per sheet**: columns that come from different merged sheets (never sharing a row) may claim the same target.
+4. `_apply_hungarian_assignment` is kept as a final safety net: if two columns from the same sheet still share a target, the lower-confidence one is demoted to `UNRESOLVED` with the reason in `rationale`.
 
 ---
 
@@ -221,61 +268,80 @@ If multiple source columns $C_1, C_2, \dots C_k$ target the same canonical field
 
 | Check # | Target Field | Failure Condition | Suggested Whitelist Op | Severity |
 |---------|--------------|-------------------|------------------------|----------|
-| 1 | All 17 Fields | Missingness $> 50\%$ / $> 20\%$ / $> 5\%$ | `flag_for_review` | High / Med / Low |
-| 2 | Monetary Fields | Presence of `$`, `,`, `(`, `)` | `strip_currency` | Medium |
-| 3 | Monetary Fields | Value $< 0.0$ | `flag_for_review` | High |
-| 4 | `Year Built` | Year $< 1700$ or $> \text{Year}_{\text{current}}$ | `to_year_int` | High |
-| 5 | `Storeys` | Floor count $< 1$ | `flag_for_review` | Medium |
-| 6 | `Number of Buildings` | Count $< 1$ | `flag_for_review` | Medium |
-| 7 | `Fire Sprinklers (Y/N)` | Code not in `{"Y", "N", "Y13", "Y(13R)"}` | `normalize_sprinkler_code` | Medium |
-| 8 | `State` | String not in `US_STATE_ABBREVS` | `state_to_abbrev` | Medium |
-| 9 | `Reference` | Duplicated identifier rows | `flag_for_review` | High |
-| 10 | `Zip` | Non-5-digit postal values | `to_zip` | Low |
+| 1 | All mapped fields | Missingness $> 50\%$ / $> 20\%$ / $> 5\%$ | `flag_for_review` | High / Med / Low |
+| 2 | Monetary Fields | Value contains `$` or `,` | `strip_currency` | Medium |
+| 3 | Monetary Fields | Value $< 0$ (incl. accounting `(1,000)`) | `flag_for_review` | High |
+| 4 | Monetary Fields | Non-numeric text (`TBD`, `Included in Bldg`) | `flag_for_review` | Medium |
+| 5 | `Year Built` | Not a year, or $< 1700$ or $> \text{Year}_{\text{current}}$ | `to_year_int` | High |
+| 6 | `Storeys` | Non-numeric, or $< 1$ | `flag_for_review` | Medium |
+| 7 | `Number of Buildings` | Count $< 1$ | `flag_for_review` | Medium |
+| 8 | `Fire Sprinklers (Y/N)` | Code not in `{"Y", "N", "Y13", "Y(13R)"}` | `normalize_sprinkler_code` | Medium |
+| 9 | `State` | Not in `US_STATE_ABBREVS` | `state_to_abbrev` | Medium |
+| 10 | `Reference` | Duplicated identifier rows | `flag_for_review` | High |
+| 11 | `Zip` | Not 5 digits | `to_zip` | Low |
+| 12 | Integer fields | Non-integer values | `to_int` | Low |
 
-#### Composite Quality Score Formula:
+Each issue becomes a recommendation with `review_required = confidence < 0.90 or severity ∈ {High, Medium}`. Mapping recommendations (`MAP-…`, operation `trim_whitespace`) are generated for every mapped column.
+
+#### Re-reasoning on rejected items (`_rereason_rejected_mappings`, `_apply_rereason_outcomes`)
+Runs first when a recommendation is `REJECTED` with a note, `feedback_processed` is false and `re_reason_count < MAX_REREASON_ATTEMPTS`:
+- **Column mapping:** `map_column` (Agent 2's cascade) is called for that source column with the rejected target and every target used by another column excluded. An alternative updates `state.mappings` and the same recommendation returns as `PENDING`, `review_required`, with the rejected target and the reviewer's note in `uncertainty` / `rationale`. No alternative: the mapping becomes `UNRESOLVED` and the item is `ESCALATED` ("Assign Target" in the UI).
+- **Data fix:** stays `REJECTED`; `uncertainty` records that the change was withdrawn and the values stay as in the source.
+- All handled items get `feedback_processed = True`, so neither the UI nor the graph re-reasons on them again.
+
+#### Carry-over (`_carry_over_decisions`)
+When Agent 3 runs again (a rejection with a note), regenerated recommendations keep the previous ID, status, rejection note, re-reason count and `feedback_processed` flag. Matching key: `(action_type, source_column)` for mappings (so an edited target survives); `(action_type, source_column, target_column, operation, issue_type)` otherwise. Same-key items are matched in order, never collapsed. The re-reasoning note is carried for processed items, and escalated items (or a target the human assigned to one) are kept even though their column is no longer mapped.
+
+#### LLM enrichment (`_llm_explain_issues`)
+- Prompt contains, per issue: severity, type, field, affected-row count, suggested operation and **one masked example** (`app.services.llm.masking.mask_value`). Raw evidence strings are not sent.
+- The LLM may rewrite `rationale` / `uncertainty` and pick a whitelisted `operation` for data-quality recommendations. It cannot change the operation of a column mapping, and it can lower but never raise `confidence`; `review_required` is recomputed so it can only become stricter.
+
+#### Composite Quality Score (`app.services.scoring.quality_score.compute_sov_quality_score`)
+Agent 3 stores this value in `QualityReport.overall_quality_score`; the UI shows the same number.
+
 $$\text{QualityScore} = 100 \times \left( 0.35 \cdot Q_{\text{mapping}} + 0.30 \cdot Q_{\text{completeness}} + 0.35 \cdot Q_{\text{anomalies}} \right)$$
 
 Where:
-- $Q_{\text{mapping}} = \frac{\sum_{m \in \text{mapped}} \text{Confidence}(m)}{17}$
-- $Q_{\text{completeness}} = \frac{\sum_{f \in \text{targets}} \text{Non-Null-Pct}(f)}{17 \times 100}$
-- $Q_{\text{anomalies}} = \max\left(0.0, 1.0 - \sum_{i \in \text{issues}} w_{\text{severity}}(i)\right)$
-  - Weights: $w_{\text{High}} = 0.15, w_{\text{Med}} = 0.05, w_{\text{Low}} = 0.02, w_{\text{Info}} = 0.00$.
+- $Q_{\text{mapping}} = \frac{|\text{mapped}|}{17} \times \overline{\text{Confidence}}_{\text{mapped}}$
+- $Q_{\text{completeness}} = \frac{1}{17}\sum_{f \in \text{targets}} \frac{\text{Non-Null-Pct}(f)}{100}$ (unmapped fields count as 0)
+- $Q_{\text{anomalies}} = \max\left(0.0, 1.0 - \sum_{i \in \text{issues}} w_{\text{severity}}(i)\right)$, $w_{\text{High}} = 0.20, w_{\text{Med}} = 0.08, w_{\text{Low}} = 0.02$.
 
 ---
 
 ### 2.4 Agent 4: Controlled Transformation (`app.agents.transformation`)
 
 #### Execution Invariant:
-Only operations present in `WHITELISTED_OPERATIONS` can be invoked. Any dynamic code execution, arbitrary `eval()`, or unapproved prompt commands are blocked at runtime.
+Only operations present in `WHITELISTED_OPERATIONS` are applied. A non-whitelisted operation is logged as an error and skipped; nothing is evaluated dynamically.
 
 #### The Whitelisted Registry:
 ```python
 TRANSFORMATION_REGISTRY: Dict[str, Callable] = {
-    "strip_currency": strip_currency,
+    "strip_currency": strip_currency,      # "$1,000" → 1000.0; non-numeric → NA
     "to_float": to_float,
-    "to_int": to_int,
+    "to_int": to_int,                      # "2.0" → 2; 1.5 stays 1.5 (never truncated)
     "to_str": to_str,
-    "to_year_int": to_year_int,
-    "to_zip": to_zip,
-    "state_to_abbrev": state_to_abbrev,
+    "to_year_int": to_year_int,            # first 1700–2029 year in the text, else NA
+    "to_zip": to_zip,                      # first 5 digits; 3–4 digit ZIPs kept (802)
+    "state_to_abbrev": state_to_abbrev,    # names, "V.I." → "VI", US territories
     "normalize_sprinkler_code": normalize_sprinkler_code,
     "trim_whitespace": trim_whitespace,
     "normalize_spaces": normalize_spaces,
     "normalize_date": normalize_date,
-    "flag_for_review": flag_for_review,
+    "flag_for_review": flag_for_review,    # identity
 }
 ```
 
-#### Collision Resolution & Atomic Mutation:
-1. **Column Renaming Phase:** If target column $T$ already exists in source DataFrame as an unmapped column, it is proactively renamed to `_orig_{T}` to prevent Pandas DataFrame column collision.
-2. **Series Multi-Index Disambiguation:** When slicing `df[col]`, if a duplicated column name yields a sub-DataFrame instead of a Series, the pipeline calculates non-null counts across duplicate columns, keeps the most complete column, and drops redundant slices.
-3. **Audit Log Generation:** For every applied transformation, row-level change detection calculates the exact number of modified cells and logs before/after samples to `AuditEntry`.
+#### Rename, Collision Resolution & Mutation:
+1. **Renames:** approved `COLUMN_MAPPING` recommendations, highest confidence first. A target can be claimed once per sheet; a later approved mapping to an already claimed target (e.g. after "Change Target") is skipped with a warning.
+2. **Strays:** any other source column whose name equals a target field (e.g. a rejected or unreviewed `State`) is renamed to `_unmapped_{name}` so it cannot reach the output.
+3. **Coalesce:** `rename_and_coalesce` combines per-sheet sources of one target.
+4. **Operations:** approved `STANDARDISATION` / `DATA_CORRECTION` recommendations run on their target column as `object` dtype. The changed-row count and a before/after sample (first changed row) are computed **before** the result is written back, so a change can never be applied without its audit entry.
+5. **Duplicate-name slices:** if `df[col]` yields a DataFrame, the slice with the most non-null values is kept.
 
 ---
 
-### 2.5 Agent 5: Validation & Export Engine (`app.processing.validation`)
+### 2.5 Validation & Export (`app.processing.validation`, end of Agent 4)
 
-#### Pandera Strict Contract Enforcement:
 ```python
 TARGET_COLUMN_ORDER = [
     "Reference", "Address", "City", "State", "Zip", "County", "Country",
@@ -290,39 +356,44 @@ schema = pa.DataFrameSchema(
 )
 ```
 
-1. **Ordering & Padding:** Any missing canonical columns are instantiated as `None`. Any unrecognized extra columns are dropped.
-2. **Serialization:** Writes finalized clean table to `Cleaned_SOV_{session}_{timestamp}.xlsx` using OpenPyXL with standard styles.
-3. **Audit Register:** Writes formatted `Audit_Log_{session}_{timestamp}.xlsx` with full traceability metadata.
+1. **Ordering & Padding (`enforce_column_order`):** missing canonical columns are added empty; extra columns are dropped.
+2. **Validation (`validate_output_schema`):** exactly 17 columns, exact names and order, the Pandera schema above, and **type conformance**: every non-null value of `Building Value`, `Contents`, `BI`, `Other` must be numeric, and of `Zip`, `Storeys`, `Number of Buildings`, `Year Built` integral. Each failure is reported as e.g. `Storeys: 1 non-integer value(s), e.g. 1.5`.
+3. **Serialization:** `Cleaned_SOV_{session}_{timestamp}.xlsx` via openpyxl, copied to `Cleaned_SOV.xlsx` (and the audit log to `Audit_Log.xlsx`) in `OUTPUT_DIR`; the written file is re-opened and any merged cell range is a validation error; numeric `Zip` cells get number format `00000`. Files are written even when validation fails (stage `VALIDATING`), so the reviewer can see the problems.
+4. **Audit Register:** `Audit_Log_{session}_{timestamp}.xlsx`.
 
 ---
 
 ## 3. Storage & Service Layer
 
 ### 3.1 Episodic Vector Memory (`app.services.memory.chroma_store`)
-- **Backend:** Embedded ChromaDB in `data/chroma_db/`.
-- **Collection:** `sov_approved_mappings`.
-- **Key Fields:** Document text (`source_column`), Metadata (`{"target_field": str, "confidence": float, "approved_at": str}`).
-- **Similarity Threshold:** $\text{CosineDistance} < 0.20 \implies \text{Similarity} \ge 0.80$.
+- **Backend:** embedded ChromaDB in `CHROMA_PERSIST_DIR` (default `./chroma_db`).
+- **Collection:** `CHROMA_COLLECTION` (default `sov_mappings`), embedded with Chroma's default embedding function.
+- **Documents:** `"{source_column} -> {target_field}"`, ID `map_{normalized_source}_{target}`; metadata `source_column`, `normalized_source`, `target_field`, `confidence`, `method` (`human_approved` / `human_edited`), `approved_by`, `timestamp`.
+- **Writes:** only when a reviewer approves or edits a column mapping in the UI.
+- **Reads:** similarity $= 1 - d/2$; results $> 0.5$ returned, $> 0.85$ used by Stage 0. Empty collections are skipped, and results are cached per (header, collection size), so a new approval invalidates the cache.
 
 ### 3.2 Dense Embedding Encoder (`app.services.embeddings.encoder`)
-- **Model:** `sentence-transformers/all-MiniLM-L6-v2` or `BAAI/bge-small-en-v1.5`.
-- **Vector Dimension:** 384 dimensions.
-- **Optimization:** In-memory LRU cache (`@lru_cache(maxsize=1024)`) on embedding generation. Precomputes and caches corpus embeddings at startup.
+- **Model:** `EMBEDDING_MODEL` (default `BAAI/bge-small-en-v1.5`), 384 dimensions, normalized embeddings.
+- **Caching:** the model is a process singleton; the corpus embeddings are computed once; fuzzy and semantic candidate lists are `lru_cache`d per header string.
 
-### 3.3 LLM Gateway (`app.services.llm.gateway`)
-- **Abstraction:** Unified `LLMGateway` supporting `complete()` and `complete_structured()`.
-- **Multi-Provider Fallback Hierarchy:**
-  1. Primary Provider: Configured in `.env` (`ollama` / `groq` / `gemini`).
-  2. Fallback Provider: If primary provider experiences HTTP 429 (Rate Limit), Connection Refused, or Read Timeout, automatically switch to secondary provider.
-  3. Safe Heuristic Mode: If all LLM providers fail, the pipeline falls back gracefully to deterministic fuzzy & value-profile scoring without raising an unhandled exception.
+### 3.3 LLM Gateway (`app.services.llm.gateway`) and Masking (`app.services.llm.masking`)
+- **Abstraction:** `LLMGateway.complete()` and `complete_structured()` (Pydantic-validated JSON with retries).
+- **Off switch:** `LLM_PROVIDER` = `none` / `off` / `disabled` makes `is_llm_available()` false and `complete()` return `None`.
+- **Provider order:** `LLM_PROVIDER` first, then the others. Groq and Gemini are tried only with an API key; Ollama only when `LLM_PROVIDER=ollama` or `OLLAMA_BASE_URL` is set explicitly (`Config.OLLAMA_CONFIGURED`).
+- **Safe Heuristic Mode:** if every provider fails, `complete()` returns `None` and the agents keep their deterministic results.
+- **Masking:** `mask_value` replaces digits with `9`, e-mail addresses with `<email>`, and truncates to 32 characters.
+
+### 3.4 Orchestration (`app.orchestration.graph`)
+- **Nodes:** `discover_sheets → map_schema → assess_quality → human_review → transform_export`, plus `re_reason` and `error`. Every conditional edge has an explicit path map.
+- **Routing after review:** unprocessed rejection notes (count below `MAX_REREASON_ATTEMPTS`) → `re_reason` (which marks them `feedback_processed`) → `human_review`; review-required items still pending → `human_review` (pause again); otherwise → `transform_export`.
+- **Checkpointing:** compiled once per process with `interrupt_before=["human_review"]` and a `SqliteSaver` (in-memory fallback).
+- **API:** `run_pipeline_to_review(state, thread_id)` runs to the pause. `resume_pipeline_after_review(state, thread_id)` writes the reviewed state into the checkpoint (`update_state`) and continues with `invoke(None)`. The UI uses a fresh `thread_id` per pipeline run.
 
 ---
 
 ## 4. Test Strategy & Verification
 
-The system is guarded by 75 regression tests in `tests/test_sov_system.py`:
-- **Unit Tests:** Unmerging, forward fill, currency stripping, sprinkler normalization, state mapping, Pandera schema enforcement.
-- **Integration Tests:** 4 end-to-end production broker SOVs (`SOV_B4ID.xlsx`, `SOV_H6D2.xlsx`, `SOV_K4T9.xlsx`, `SOV_Q8B3.xlsx`).
-- **Regression Invariant:** Every test run must produce 100% Pandera validation compliance and 0 failed assertions.
-
----
+The system is guarded by 92 tests in `tests/test_sov_system.py`; `tests/conftest.py` redirects ChromaDB, outputs, uploads and checkpoints to a temporary directory.
+- **Unit Tests:** ingestion, header detection, sheet ranking, exact/fuzzy mapping, confidence, value profiling, anomaly rules, every whitelisted transformation, null preservation, schema validation, masking, LLM-provider gating.
+- **Integration Tests:** end-to-end runs on the synthetic samples; the LangGraph run → pause → reject/re-reason → resume → export cycle; audit logging; malformed input.
+- **Real-file regressions:** synthetic workbooks reproducing defects found in the broker files (merged footnotes, first-come mapping, value-profile veto, multi-sheet merge, rejected same-name columns, zero-stripped ZIPs, flags sharing a field). The four broker files themselves are not part of the automated suite; they are verified manually (see `README.md`, "Verified on Real SOVs").

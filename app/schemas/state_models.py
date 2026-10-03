@@ -206,6 +206,7 @@ class Recommendation(BaseModel):
     status: RecommendationStatus = RecommendationStatus.PENDING
     rejection_note: str = ""
     re_reason_count: int = 0
+    feedback_processed: bool = False  # True once Agent 3 has re-reasoned on rejection_note
     issue_id: Optional[str] = None
     review_required: bool = False  # True when confidence < HIGH_CONFIDENCE_THRESHOLD
 
@@ -258,6 +259,7 @@ class SOVState(BaseModel):
     sheet_manifest: Optional[SheetManifest] = None
     header_row: int = 0  # confirmed header row (0-indexed)
     primary_sheet_name: Optional[str] = None
+    data_sheets: List[str] = Field(default_factory=list)  # all sheets merged into the output
 
     # --- Agent 2 outputs ---
     mappings: Optional[MappingResult] = None

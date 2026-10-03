@@ -71,22 +71,22 @@ TARGET_DEFINITIONS: Dict[str, str] = {
 
 # Synonyms / common abbreviations used in fuzzy/semantic matching
 TARGET_SYNONYMS: Dict[str, List[str]] = {
-    "Reference": ["Ref", "Loc #", "Location #", "Loc No", "Location No", "Location ID", "Loc ID", "Pol No", "Policy No", "Site ID", "Risk ID", "Item No", "Loc Num"],
+    "Reference": ["Ref", "Loc #", "Location #", "Loc No", "Location No", "Location ID", "Loc ID", "Pol No", "Policy No", "Site ID", "Risk ID", "Item No", "Item #", "Loc Num", "Location Number"],
     "Address": ["Street", "Street Address", "Addr", "Property Address", "Site Address", "Location Address"],
-    "City": ["Town", "Municipality", "Locality"],
+    "City": ["City Name", "Town", "Municipality", "Locality"],
     "State": ["ST", "Province", "St.", "State Code"],
     "Zip": ["ZIP Code", "Postal Code", "Zip Code", "Post Code", "Zipcode", "Zip+4", "Zip Code (5 digit)"],
     "County": ["Parish", "Borough", "District"],
-    "Country": ["Nation", "Country Code", "Ctry"],
-    "Building Value": ["Bldg Value", "Bldg Repl Cost", "Building RCV", "Bldg RCV", "Replacement Cost", "TIV-Bldg", "Building TIV", "Bldg", "Structure Value", "Bldg Val"],
-    "Contents": ["Contents Value", "Cont Value", "Contents TIV", "TIV-Contents", "Personal Property"],
-    "BI": ["Business Interruption", "Business Interruption Value", "BI Value", "Time Element", "BI/EE", "BI EE", "Loss of Rents", "Rental Value"],
+    "Country": ["Nation", "Country Code", "Country Name", "Ctry"],
+    "Building Value": ["Building", "Building Values", "Bldg Value", "Bldg Repl Cost", "Building RCV", "Bldg RCV", "Replacement Cost", "TIV-Bldg", "Building TIV", "Structure Value", "Bldg Val"],
+    "Contents": ["Contents Value", "Cont Value", "Contents TIV", "TIV-Contents", "Personal Property", "Business Personal Property", "BPP"],
+    "BI": ["Business Interruption", "Business Interruption Value", "BI Value", "Time Element", "BI/EE", "BI EE", "Business Income", "Extra Expense", "Loss of Rents", "Rental Value"],
     "Occupancy": ["Occ", "Occ Code", "Occupancy Class", "Use", "Building Use", "Property Type", "Occ Type"],
     "Construction": ["Const", "Const Code", "Construction Type", "Build Type", "Frame Type", "ISO Construction"],
-    "Storeys": ["Stories", "Floors", "No of Floors", "Num Floors", "Num Stories", "No of Stories", "Num of Storeys", "Floor Count", "# Floors"],
-    "Number of Buildings": ["Num Bldgs", "# Bldgs", "Bldg Count", "No of Buildings", "Buildings", "Num Buildings"],
+    "Storeys": ["Stories", "Floors", "No of Floors", "Num Floors", "Num Stories", "No of Stories", "# of Stories", "Number of Stories", "Num of Storeys", "Floor Count", "# Floors", "# Floor"],
+    "Number of Buildings": ["Num Bldgs", "# Bldgs", "No of Bldgs", "Bldg Count", "No of Buildings", "# of Buildings", "Num Buildings", "Building Count"],
     "Year Built": ["Yr Blt", "Yr Built", "Year of Construction", "Built Year", "Construct Year", "Build Year", "Year Constructed"],
-    "Fire Sprinklers (Y/N)": ["Fire Prot", "Fire Protection", "Sprinklers", "Sprinkler", "Fire Sprinkler", "Sprinkler System", "SPRK", "Fire Prot.", "Sprk Sys"],
+    "Fire Sprinklers (Y/N)": ["Fire Prot", "Fire Protection", "Sprinklers", "Sprinkler", "Sprinklered", "% Sprinklered", "Sprinkler %", "Fire Sprinkler", "Sprinkler System", "SPRK", "Sprink", "Fire Prot.", "Sprk Sys"],
     "Other": ["Other Value", "Other TIV", "Misc Value", "Miscellaneous", "Other Covered", "Add'l Value"],
 }
 

@@ -36,7 +36,7 @@ from app.schemas.target_schema import (
     INTEGER_FIELDS,
     STRING_FIELDS,
 )
-from app.processing.workbook import unmerge_and_forward_fill, extract_data_frame
+from app.processing.workbook import load_source_data, rename_and_coalesce
 from app.processing.transformations import (
     WHITELISTED_OPERATIONS,
     suggest_operation_for_target,
@@ -55,26 +55,21 @@ def _get_mapped_df(state: SOVState) -> Optional[pd.DataFrame]:
     if state.file_meta is None or state.mappings is None:
         return None
 
-    path = state.file_meta.temp_path
-    sheet = state.primary_sheet_name or ""
-    header_row = state.header_row
-
-    df = unmerge_and_forward_fill(path, sheet)
-    if df.empty:
+    data_df = load_source_data(state)
+    if data_df.empty:
         return None
 
-    data_df = extract_data_frame(df, header_row)
-
-    # Rename according to mappings, avoiding duplicate targets
-    rename_map = {}
-    claimed_targets = set()
-    for m in state.mappings.mappings:
-        if m.target is not None and m.source_column in data_df.columns:
-            if m.target not in claimed_targets:
-                rename_map[m.source_column] = m.target
-                claimed_targets.add(m.target)
-
-    data_df = data_df.rename(columns=rename_map)
+    # Rename according to mappings; sources from different merged sheets that
+    # share a target are combined into one column
+    pairs = [
+        (m.source_column, m.target)
+        for m in sorted(state.mappings.mappings, key=lambda m: -m.confidence)
+        if m.target is not None and m.source_column in data_df.columns
+    ]
+    targets = {t for _, t in pairs}
+    stray = {c: f"_unmapped_{c}" for c in data_df.columns
+             if c in targets and c not in {s for s, _ in pairs}}
+    data_df = rename_and_coalesce(data_df.rename(columns=stray), pairs)
 
     # Guarantee every column name is strictly unique
     seen: Dict[str, int] = {}
@@ -173,17 +168,21 @@ def detect_quality_issues(
                 confidence=0.98,
             ))
 
-        # Detect negative values
+        # Detect negative values (including accounting format "(1,000)")
         def parse_monetary(v):
+            s = str(v).replace("$", "").replace(",", "").strip()
+            if s.startswith("(") and s.endswith(")"):
+                s = "-" + s[1:-1]
             try:
-                return float(str(v).replace("$", "").replace(",", "").strip())
+                return float(s)
             except Exception:
                 return None
 
         parsed = col.apply(parse_monetary)
         neg_rows = list(parsed[parsed < 0].index)
         if neg_rows:
-            sample_neg = str(col.iloc[neg_rows[0]])
+            # neg_rows are index labels; col has had NaNs dropped, so use .loc
+            sample_neg = str(col.loc[neg_rows[0]])
             issues.append(QualityIssue(
                 issue_id=new_id(),
                 issue_type="logical_error",
@@ -193,6 +192,24 @@ def detect_quality_issues(
                 affected_row_count=len(neg_rows),
                 evidence=f"{field}: {len(neg_rows)} rows have negative monetary values.",
                 before_example=sample_neg,
+                suggested_operation="flag_for_review",
+                confidence=1.0,
+            ))
+
+        # Detect non-numeric text in a monetary field ("TBD", "Included",
+        # "see note"). Converting these would silently null them, so they are
+        # flagged for a human rather than auto-fixed.
+        text_rows = list(parsed[parsed.isna()].index)
+        if text_rows:
+            issues.append(QualityIssue(
+                issue_id=new_id(),
+                issue_type="type_error",
+                severity=Severity.MEDIUM,
+                affected_field=field,
+                affected_rows=text_rows[:50],
+                affected_row_count=len(text_rows),
+                evidence=f"{field}: {len(text_rows)} rows contain non-numeric values.",
+                before_example=str(col.loc[text_rows[0]]),
                 suggested_operation="flag_for_review",
                 confidence=1.0,
             ))
@@ -423,36 +440,14 @@ def compute_quality_score(
     mappings,
 ) -> float:
     """
-    Aggregate SOV quality score from:
-    - mapping confidence
-    - completeness
-    - anomaly count/severity
+    Aggregate SOV quality score (0–100) from mapping confidence, completeness
+    and anomaly severity. Delegates to the scoring service so the score stored
+    in the QualityReport is the same number the UI displays.
     """
-    # Mapping score
-    if mappings and mappings.mappings:
-        mapped = [m for m in mappings.mappings if m.target is not None]
-        mapping_score = sum(m.confidence for m in mapped) / max(len(TARGET_FIELDS), 1)
-    else:
-        mapping_score = 0.0
+    from app.services.scoring.quality_score import compute_sov_quality_score
 
-    # Completeness score
-    if completeness:
-        comp_score = sum(v for v in completeness.values() if v > 0) / (len(TARGET_FIELDS) * 100)
-    else:
-        comp_score = 0.0
-
-    # Anomaly penalty
-    severity_weights = {Severity.HIGH: 0.15, Severity.MEDIUM: 0.05, Severity.LOW: 0.02, Severity.INFO: 0.0}
-    penalty = sum(severity_weights.get(i.severity, 0) for i in issues)
-    anomaly_score = max(0.0, 1.0 - penalty)
-
-    # Weighted composite
-    score = (
-        0.35 * mapping_score
-        + 0.30 * comp_score
-        + 0.35 * anomaly_score
-    )
-    return round(min(1.0, max(0.0, score)) * 100, 1)  # 0–100
+    report = QualityReport(issues=issues, completeness_by_field=completeness)
+    return compute_sov_quality_score(report, mappings)
 
 
 # ---------------------------------------------------------------------------
@@ -532,9 +527,15 @@ def _llm_explain_issues(
             logger.info("LLM not available — using deterministic recommendations only.")
             return recommendations
 
-        # Group issues for batch explanation (avoid per-row calls)
+        from app.services.llm.masking import mask_value
+
+        # Group issues for batch explanation (avoid per-row calls). Data
+        # minimisation: counts, operations and one masked example only — the
+        # raw evidence text can contain actual IDs, names and values.
         issue_summary = "\n".join(
-            f"- [{i.severity.upper()}] {i.issue_type} in '{i.affected_field}': {i.evidence}"
+            f"- [{i.severity.upper()}] {i.issue_type} in '{i.affected_field}': "
+            f"{i.affected_row_count} row(s) affected; suggested operation {i.suggested_operation}; "
+            f"example (masked): {mask_value(i.before_example)}"
             for i in issues[:15]  # Cap to prevent huge prompts
         )
 
@@ -591,14 +592,25 @@ def _llm_explain_issues(
                         if rec.id in enrichment_map:
                             e = enrichment_map[rec.id]
                             op = e.get("operation", rec.operation)
-                            # Validate operation is whitelisted
-                            if op not in WHITELISTED_OPERATIONS:
+                            # Validate operation is whitelisted. Column-mapping
+                            # recs are renames, not data operations, so the LLM
+                            # may not attach a transformation to them.
+                            if op not in WHITELISTED_OPERATIONS or rec.action_type == ActionType.COLUMN_MAPPING:
                                 op = rec.operation
+                            # The LLM may lower confidence but never raise it:
+                            # raising it would move a rec into "Approve All
+                            # High-Confidence" without deterministic evidence.
+                            try:
+                                llm_conf = float(e.get("confidence", rec.confidence))
+                            except (TypeError, ValueError):
+                                llm_conf = rec.confidence
+                            new_conf = min(rec.confidence, max(0.0, llm_conf))
                             recommendations[recommendations.index(rec)] = rec.model_copy(update={
                                 "rationale": e.get("rationale", rec.rationale),
                                 "operation": op,
                                 "uncertainty": e.get("uncertainty", rec.uncertainty),
-                                "confidence": float(e.get("confidence", rec.confidence)),
+                                "confidence": new_conf,
+                                "review_required": rec.review_required or new_conf < config.HIGH_CONFIDENCE_THRESHOLD,
                             })
             except Exception as e:
                 logger.warning("LLM enrichment parse failed: %s", e)
@@ -646,6 +658,199 @@ def _generate_mapping_recommendations(state: SOVState) -> List[Recommendation]:
     return recs
 
 
+def _carry_over_decisions(
+    new_recs: List[Recommendation],
+    previous: List[Recommendation],
+    new_issue_types: Optional[Dict[str, str]] = None,
+    old_issue_types: Optional[Dict[str, str]] = None,
+) -> List[Recommendation]:
+    """
+    On re-reasoning, keep the identity and human decisions of recommendations
+    that are regenerated unchanged. Without this, a single rejection would
+    reset every prior approval (new IDs, status PENDING) and resurrect the
+    rejected item itself.
+    """
+    if not previous:
+        return new_recs
+
+    new_issue_types = new_issue_types or {}
+    old_issue_types = old_issue_types or {}
+
+    def key(r: Recommendation, issue_types: Dict[str, str]):
+        # A mapping rec is identified by its source column alone, so a target
+        # the reviewer edited ("Change Target") survives re-reasoning.
+        if r.action_type == ActionType.COLUMN_MAPPING:
+            return (r.action_type, r.source_column)
+        # Issue type distinguishes e.g. "completeness" and "duplicate" flags
+        # that share field and operation.
+        return (r.action_type, r.source_column, r.target_column, r.operation,
+                issue_types.get(r.issue_id or "", ""))
+
+    # Same-key recs (if any remain) are matched in order, never collapsed.
+    prior: Dict[tuple, List[Recommendation]] = {}
+    for r in previous:
+        prior.setdefault(key(r, old_issue_types), []).append(r)
+    merged = []
+    for rec in new_recs:
+        candidates = prior.get(key(rec, new_issue_types))
+        old = candidates.pop(0) if candidates else None
+        if old is not None:
+            update = {
+                "id": old.id,
+                "status": old.status,
+                "rejection_note": old.rejection_note,
+                "re_reason_count": old.re_reason_count,
+                "feedback_processed": old.feedback_processed,
+            }
+            if old.action_type == ActionType.COLUMN_MAPPING and old.status != RecommendationStatus.PENDING:
+                update.update(target_column=old.target_column, confidence=old.confidence, uncertainty=old.uncertainty)
+            elif old.feedback_processed:
+                update["uncertainty"] = old.uncertainty  # keeps the re-reasoning note
+            rec = rec.model_copy(update=update)
+        merged.append(rec)
+
+    # Escalated items (and a target the human then assigned to one) stay in the
+    # queue even though they are no longer regenerated: their column is unmapped.
+    for leftovers in prior.values():
+        merged.extend(
+            r for r in leftovers
+            if r.status == RecommendationStatus.ESCALATED
+            or (r.action_type == ActionType.COLUMN_MAPPING and r.status != RecommendationStatus.PENDING
+                and r.feedback_processed)
+        )
+    return merged
+
+
+def _rejections_to_rereason(state: SOVState) -> List[Recommendation]:
+    from app.config import config
+    return [
+        r for r in state.recommendations
+        if r.status == RecommendationStatus.REJECTED
+        and r.rejection_note
+        and not r.feedback_processed
+        and r.re_reason_count < config.MAX_REREASON_ATTEMPTS
+    ]
+
+
+def _rereason_rejected_mappings(state: SOVState, rejected: List[Recommendation]) -> Dict[str, Optional[str]]:
+    """
+    Re-reason on column mappings the reviewer rejected with feedback: ask the
+    mapping cascade (Agent 2's map_column) for the best alternative target,
+    excluding the rejected one and targets used by other columns. Updates
+    state.mappings in place. Returns {source_column: alternative target or None}.
+    """
+    targets = [r for r in rejected if r.action_type == ActionType.COLUMN_MAPPING]
+    if not targets or state.mappings is None:
+        return {}
+
+    from app.agents.schema_mapping import map_column
+    from app.processing.workbook import load_source_data
+    from app.schemas.state_models import ColumnMapping, MappingMethod
+
+    source_df = load_source_data(state)
+    outcomes: Dict[str, Optional[str]] = {}
+    for rec in targets:
+        col = rec.source_column
+        idx = next((i for i, m in enumerate(state.mappings.mappings) if m.source_column == col), None)
+        if idx is None or col not in source_df.columns:
+            continue
+        series = source_df[col]
+        if isinstance(series, pd.DataFrame):
+            series = series.iloc[:, 0]
+        excluded = {
+            m.target for m in state.mappings.mappings if m.target and m.source_column != col
+        } | {rec.target_column}
+        alt = map_column(col, series, excluded)
+        prefix = f"Re-reasoned after reviewer rejected '{rec.target_column}' (\"{rec.rejection_note}\")."
+        if alt.target:
+            state.mappings.mappings[idx] = alt.model_copy(update={
+                "rationale": f"{prefix} {alt.rationale}",
+                "review_required": True,
+            })
+            outcomes[col] = alt.target
+        else:
+            state.mappings.mappings[idx] = ColumnMapping(
+                source_column=col, target=None, confidence=0.0, method=MappingMethod.UNRESOLVED,
+                rationale=f"{prefix} No alternative target found; escalated to a human reviewer.",
+                evidence=alt.evidence, review_required=True,
+            )
+            outcomes[col] = None
+
+    mapped = {m.target for m in state.mappings.mappings if m.target}
+    state.mappings.unmapped_source_columns = [m.source_column for m in state.mappings.mappings if m.target is None]
+    state.mappings.unmapped_target_fields = [f for f in TARGET_FIELDS if f not in mapped]
+    return outcomes
+
+
+def _apply_rereason_outcomes(
+    recs: List[Recommendation],
+    rejected: List[Recommendation],
+    mapping_outcomes: Dict[str, Optional[str]],
+    state: SOVState,
+) -> List[Recommendation]:
+    """Make the result of re-reasoning visible on each rejected item."""
+    by_id = {r.id: r for r in rejected}
+    mappings = {m.source_column: m for m in state.mappings.mappings} if state.mappings else {}
+    out = []
+    for rec in recs:
+        old = by_id.get(rec.id)
+        if old is None:
+            out.append(rec)
+            continue
+        note = f"\"{old.rejection_note}\""
+        if old.action_type == ActionType.COLUMN_MAPPING and old.source_column in mapping_outcomes:
+            alt = mapping_outcomes[old.source_column]
+            if alt:
+                m = mappings[old.source_column]
+                rec = rec.model_copy(update={
+                    "target_column": alt,
+                    "confidence": m.confidence,
+                    "after_example": f"Renamed to: '{alt}'",
+                    "rationale": m.rationale,
+                    "status": RecommendationStatus.PENDING,
+                    "review_required": True,
+                    "uncertainty": (
+                        f"Re-reasoned with reviewer feedback {note}: '{old.target_column}' withdrawn; "
+                        f"alternative '{alt}' proposed for review."
+                    ),
+                    "feedback_processed": True,
+                })
+            else:
+                rec = rec.model_copy(update={
+                    "status": RecommendationStatus.ESCALATED,
+                    "uncertainty": (
+                        f"Re-reasoned with reviewer feedback {note}: no alternative target fits this "
+                        f"column. Escalated to a human reviewer; the column stays unmapped unless a target is assigned."
+                    ),
+                    "feedback_processed": True,
+                })
+        else:
+            rec = rec.model_copy(update={
+                "uncertainty": (
+                    f"Re-reasoned with reviewer feedback {note}: change withdrawn; "
+                    f"the values stay as they are in the source."
+                ),
+                "feedback_processed": True,
+            })
+        out.append(rec)
+
+    # A mapping with no alternative is now unmapped, so it is not regenerated:
+    # keep the item in the queue as escalated.
+    present = {r.id for r in out}
+    for old in rejected:
+        if old.id not in present and old.action_type == ActionType.COLUMN_MAPPING \
+                and mapping_outcomes.get(old.source_column, "missing") is None:
+            out.append(old.model_copy(update={
+                "status": RecommendationStatus.ESCALATED,
+                "uncertainty": (
+                    f"Re-reasoned with reviewer feedback \"{old.rejection_note}\": no alternative target fits this "
+                    f"column. Escalated to a human reviewer; the column stays unmapped unless a target is assigned."
+                ),
+                "feedback_processed": True,
+            }))
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Agent 3 node function
 # ---------------------------------------------------------------------------
@@ -664,6 +869,11 @@ def run_quality_reasoning(state: SOVState) -> SOVState:
         state.error_message = "No mappings available for quality assessment."
         state.stage = WorkflowStage.ERROR
         return state
+
+    # Re-reasoning on rejected items (with reviewer feedback) happens first,
+    # because a rejected mapping may be replaced and that changes the data view
+    rejected = _rejections_to_rereason(state)
+    mapping_outcomes = _rereason_rejected_mappings(state, rejected) if rejected else {}
 
     # Load mapped DataFrame
     data_df = _get_mapped_df(state)
@@ -698,11 +908,18 @@ def run_quality_reasoning(state: SOVState) -> SOVState:
     # Generate column mapping recommendations
     mapping_recs = _generate_mapping_recommendations(state)
 
-    all_recs = mapping_recs + data_quality_recs
+    all_recs = _carry_over_decisions(
+        mapping_recs + data_quality_recs,
+        state.recommendations,
+        new_issue_types={i.issue_id: i.issue_type for i in issues},
+        old_issue_types={i.issue_id: i.issue_type for i in state.quality_report.issues} if state.quality_report else {},
+    )
 
     # Part B: LLM enrichment (batch, not per-row)
     feedback = state.re_reason_feedback
     all_recs = _llm_explain_issues(issues, all_recs, feedback=feedback)
+    if rejected:
+        all_recs = _apply_rereason_outcomes(all_recs, rejected, mapping_outcomes, state)
 
     state.quality_report = quality_report
     state.recommendations = all_recs

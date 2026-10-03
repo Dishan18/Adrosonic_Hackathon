@@ -358,11 +358,17 @@ def run_sheet_discovery(state: SOVState) -> SOVState:
     state.sheet_manifest = manifest
     state.header_row = primary.header_row
     state.primary_sheet_name = primary.sheet_name
+    # Every sheet classified Primary is SOV location data; they are merged into
+    # one output. The best-scoring sheet comes first.
+    state.data_sheets = [primary.sheet_name] + [
+        r.sheet_name for r in results
+        if r.classification == SheetClassification.PRIMARY and r.sheet_name != primary.sheet_name
+    ]
     state.stage = WorkflowStage.DISCOVERED
 
     logger.info(
-        "Agent 1 complete. Primary sheet: '%s', header row: %d, confidence: %.3f",
-        primary.sheet_name, primary.header_row, primary.confidence,
+        "Agent 1 complete. Primary sheet: '%s', header row: %d, confidence: %.3f. Data sheets: %s",
+        primary.sheet_name, primary.header_row, primary.confidence, state.data_sheets,
     )
     return state
 

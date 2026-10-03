@@ -50,14 +50,22 @@ def to_float(value: Any) -> Any:
 
 
 def to_int(value: Any) -> Any:
-    """Convert to integer. Preserve NaN."""
+    """
+    Convert to integer. Preserve NaN.
+    Fractional values (e.g. 1.5 storeys) are returned unchanged rather than
+    truncated: silently turning 1.5 into 1 would alter the insured risk, so the
+    value stays visible to the reviewer (and to output validation).
+    """
     if pd.isna(value) or value is None:
         return value
     s = str(value).strip().replace(",", "")
     if s == "":
         return pd.NA
     try:
-        return int(float(s))
+        f = float(s)
+        if not f.is_integer():
+            return value
+        return int(f)
     except (ValueError, OverflowError):
         return pd.NA
 
@@ -91,6 +99,10 @@ def state_to_abbrev(value: Any) -> Any:
     s = str(value).strip()
     if s.upper() in US_STATE_ABBREVS:
         return s.upper()
+    # Dotted/spaced abbreviations: "V.I." → "VI", "N. Y." → "NY"
+    compact = re.sub(r"[\s.]", "", s).upper()
+    if compact in US_STATE_ABBREVS:
+        return compact
 
     # Full state name lookup
     STATE_MAP = {
@@ -107,6 +119,9 @@ def state_to_abbrev(value: Any) -> Any:
         "south dakota": "SD", "tennessee": "TN", "texas": "TX", "utah": "UT",
         "vermont": "VT", "virginia": "VA", "washington": "WA", "west virginia": "WV",
         "wisconsin": "WI", "wyoming": "WY", "district of columbia": "DC",
+        "puerto rico": "PR", "guam": "GU", "american samoa": "AS",
+        "virgin islands": "VI", "us virgin islands": "VI", "u.s. virgin islands": "VI",
+        "northern mariana islands": "MP",
     }
     abbrev = STATE_MAP.get(s.lower())
     return abbrev if abbrev else s  # Return original if no match
@@ -157,7 +172,12 @@ def to_year_int(value: Any) -> Any:
 
 
 def to_zip(value: Any) -> Any:
-    """Extract/normalize 5-digit ZIP code."""
+    """
+    Extract/normalize 5-digit ZIP code (as an integer, per the target schema).
+    3–4 digit values are ZIPs whose leading zeros were dropped by Excel
+    (e.g. 802 for 00802); they are kept, and the exported Zip column is
+    formatted "00000" so they display with their zeros.
+    """
     if pd.isna(value) or value is None:
         return value
     s = str(value).strip()
@@ -171,6 +191,8 @@ def to_zip(value: Any) -> Any:
             return int(zip5)
         except ValueError:
             return pd.NA
+    if len(digits) >= 3:
+        return int(digits)
     return pd.NA
 
 

@@ -46,6 +46,7 @@ outputs/*.json
 
 # ChromaDB & DBs
 chroma_db/
+chroma_db_backup_*/
 checkpoints.sqlite
 *.sqlite
 *.db
@@ -56,9 +57,14 @@ checkpoints.sqlite
 *.swp
 *.swo
 
-# OS
+# OS & temporary files
 .DS_Store
 Thumbs.db
+~$*
+~$*.xlsx
+~$*.pptx
+~$*.docx
+*.tmp
 
 # Logs
 *.log

@@ -28,7 +28,7 @@ from app.schemas.state_models import (
     WorkflowStage,
 )
 from app.schemas.target_schema import TARGET_FIELDS
-from app.processing.workbook import unmerge_and_forward_fill, extract_data_frame
+from app.processing.workbook import load_source_data, rename_and_coalesce
 from app.processing.transformations import (
     WHITELISTED_OPERATIONS,
     apply_transformation_to_series,
@@ -45,21 +45,10 @@ logger = logging.getLogger(__name__)
 
 
 def _load_source_df(state: SOVState) -> Optional[pd.DataFrame]:
-    """Load and extract the primary data sheet as a clean DataFrame."""
+    """Load and extract all data sheets as one clean DataFrame."""
     if state.file_meta is None:
         return None
-
-    path = state.file_meta.temp_path
-    sheet = state.primary_sheet_name or ""
-    header_row = state.header_row
-
-    df = unmerge_and_forward_fill(path, sheet)
-    if df.empty:
-        from app.processing.workbook import load_workbook_sheets
-        sheets = load_workbook_sheets(path)
-        df = sheets.get(sheet, pd.DataFrame())
-
-    return extract_data_frame(df, header_row)
+    return load_source_data(state)
 
 
 def _apply_approved_transformations(
@@ -78,33 +67,61 @@ def _apply_approved_transformations(
     df = source_df.copy()
     audit_entries: List[AuditEntry] = []
 
-    # Step 1: Apply column renames (from COLUMN_MAPPING recommendations)
-    rename_map = {}
-    for rec in approved_recs:
-        if rec.action_type == ActionType.COLUMN_MAPPING and rec.status == RecommendationStatus.APPROVED:
-            src = rec.source_column
-            tgt = rec.target_column
-            if src in df.columns and src != tgt:
-                rename_map[src] = tgt
-                audit_entries.append(create_audit_entry(
-                    source_column=src,
-                    target_column=tgt,
-                    transformation_applied="column_rename",
-                    before_value=f"Column '{src}'",
-                    after_value=f"Column '{tgt}'",
-                    confidence=rec.confidence,
-                    approved_by="human",
-                    recommendation_id=rec.id,
-                ))
+    # Step 1: Apply column renames (from COLUMN_MAPPING recommendations).
+    # Strongest approval first. A target can be claimed once per sheet: an
+    # edited target may collide with another approved mapping, while columns
+    # from different merged sheets may legitimately share a target.
+    column_sheets = df.attrs.get("column_sheets", {})
 
-    if rename_map:
-        # If any target column name already exists in df and isn't being renamed itself,
-        # rename it first to avoid column collisions
-        for src, tgt in rename_map.items():
-            if tgt in df.columns and tgt not in rename_map:
-                df = df.rename(columns={tgt: f"_orig_{tgt}"})
-        df = df.rename(columns=rename_map)
-        logger.info("Renamed columns: %s", rename_map)
+    def sheets_of(col: str) -> set:
+        return set(column_sheets.get(col, ["_single_"]))
+
+    approved_mappings = sorted(
+        (r for r in approved_recs
+         if r.action_type == ActionType.COLUMN_MAPPING and r.status == RecommendationStatus.APPROVED),
+        key=lambda r: -r.confidence,
+    )
+    pairs = []
+    mapped_sources = set()
+    claimed: dict = {}
+    for rec in approved_mappings:
+        src = rec.source_column
+        tgt = rec.target_column
+        if src not in df.columns or src in mapped_sources:
+            continue
+        if claimed.get(tgt, set()) & sheets_of(src):
+            logger.warning(
+                "Approved mapping '%s' → '%s' skipped: target already claimed by another approved mapping.",
+                src, tgt,
+            )
+            continue
+        claimed.setdefault(tgt, set()).update(sheets_of(src))
+        mapped_sources.add(src)
+        pairs.append((src, tgt))
+        if src != tgt:
+            audit_entries.append(create_audit_entry(
+                source_column=src,
+                target_column=tgt,
+                transformation_applied="column_rename",
+                before_value=f"Column '{src}'",
+                after_value=f"Column '{tgt}'",
+                confidence=rec.confidence,
+                approved_by="human",
+                recommendation_id=rec.id,
+            ))
+
+    # A source column that merely happens to carry a target name (e.g. "State",
+    # "Other") must not reach the output unless its own mapping was approved —
+    # otherwise rejected or unreviewed data leaks into Cleaned_SOV.
+    stray = {
+        c: f"_unmapped_{c}" for c in df.columns
+        if c in TARGET_FIELDS and c not in mapped_sources
+    }
+    if stray:
+        df = df.rename(columns=stray)
+    if pairs:
+        df = rename_and_coalesce(df, pairs)
+        logger.info("Mapped columns: %s", pairs)
 
     # Step 2: Apply data transformations (STANDARDISATION / DATA_CORRECTION)
     for rec in approved_recs:
@@ -151,16 +168,30 @@ def _apply_approved_transformations(
                 if isinstance(before_series, pd.DataFrame):
                     before_series = before_series.iloc[:, 0]
 
-                # Apply transformation
-                df[target_col] = apply_transformation_to_series(operation, before_series)
+                # Apply transformation (object dtype: mixed int/str/float
+                # values must not be coerced by pandas' arrow-backed str dtype)
+                before_obj = before_series.astype(object)
+                after_series = apply_transformation_to_series(operation, before_obj).astype(object)
 
-                # Create audit entries for changed rows
-                changed_mask = (df[target_col] != before_series) & ~(df[target_col].isna() & before_series.isna())
-                n_changed = int(changed_mask.sum()) if hasattr(changed_mask, "sum") else 0
+                # Count changed rows BEFORE writing back, so a failure here can
+                # never leave an applied-but-unaudited change in the output.
+                def _same(a, b) -> bool:
+                    if pd.isna(a) and pd.isna(b):
+                        return True
+                    if pd.isna(a) or pd.isna(b):
+                        return False
+                    return a == b
 
-                # Summarize in one audit entry per recommendation
-                before_sample = str(before_series.iloc[0]) if len(before_series) > 0 else ""
-                after_sample = str(df[target_col].iloc[0]) if len(df) > 0 else ""
+                changed = [not _same(a, b) for a, b in zip(after_series, before_obj)]
+                n_changed = int(sum(changed))
+
+                # Summarize in one audit entry per recommendation, sampling a
+                # row that actually changed
+                first = changed.index(True) if n_changed else 0
+                before_sample = str(before_obj.iloc[first]) if len(before_obj) > 0 else ""
+                after_sample = str(after_series.iloc[first]) if len(after_series) > 0 else ""
+
+                df[target_col] = after_series
 
                 audit_entries.append(create_audit_entry(
                     source_column=rec.source_column,
@@ -253,6 +284,12 @@ def run_transformation(state: SOVState) -> SOVState:
     try:
         with pd.ExcelWriter(cleaned_path, engine="openpyxl") as writer:
             final_df.to_excel(writer, sheet_name="Cleaned_SOV", index=False)
+            # Zip is an integer field; show leading zeros (802 → 00802)
+            ws = writer.sheets["Cleaned_SOV"]
+            zip_col = TARGET_COLUMN_ORDER.index("Zip") + 1
+            for (cell,) in ws.iter_rows(min_row=2, min_col=zip_col, max_col=zip_col):
+                if isinstance(cell.value, (int, float)) and not isinstance(cell.value, bool):
+                    cell.number_format = "00000"
         logger.info("Cleaned_SOV.xlsx saved: %s", cleaned_path)
     except Exception as e:
         state.error_message = f"Failed to write Cleaned_SOV.xlsx: {e}"
@@ -264,6 +301,28 @@ def run_transformation(state: SOVState) -> SOVState:
         export_audit_log_xlsx(audit_entries, audit_path)
     except Exception as e:
         logger.error("Audit log export failed: %s", e)
+
+    # Schema conformance of the written file: no merged cells
+    try:
+        import openpyxl
+        merged = len(openpyxl.load_workbook(cleaned_path)["Cleaned_SOV"].merged_cells.ranges)
+        if merged:
+            passed = False
+            validation_errors.append(f"Cleaned_SOV.xlsx contains {merged} merged cell range(s).")
+            state.validation_passed = False
+            state.validation_errors = validation_errors
+    except Exception as e:
+        logger.warning("Merged-cell check on output failed: %s", e)
+
+    # Required deliverable names (Cleaned_SOV.xlsx / Audit_Log.xlsx) next to the
+    # timestamped copies, which are kept as history
+    import shutil
+    for src, name in ((cleaned_path, "Cleaned_SOV.xlsx"), (audit_path, "Audit_Log.xlsx")):
+        try:
+            if Path(src).exists():
+                shutil.copyfile(src, output_dir / name)
+        except Exception as e:  # e.g. the previous copy is open in Excel
+            logger.warning("Could not write %s: %s", name, e)
 
     state.output_path = cleaned_path
     state.audit_log_path = audit_path

@@ -394,7 +394,7 @@ def run_benchmark():
             print(f"  - {e['file']}: {e.get('error', 'unknown error')}")
 
     # Save report
-    report_path = Path(__file__).parent.parent / "outputs/benchmark_report.json"
+    report_path = Path(__file__).parent / "outputs/benchmark_report.json"
     report_path.parent.mkdir(parents=True, exist_ok=True)
     with open(report_path, "w") as f:
         json.dump({

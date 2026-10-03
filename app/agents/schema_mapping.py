@@ -17,6 +17,7 @@ import json
 import logging
 import re
 import uuid
+from functools import lru_cache
 from typing import Dict, List, Optional, Set, Tuple
 
 import pandas as pd
@@ -33,7 +34,7 @@ from app.schemas.target_schema import (
     TARGET_FIELDS,
     TARGET_SYNONYMS,
 )
-from app.processing.workbook import unmerge_and_forward_fill, extract_data_frame
+from app.processing.workbook import load_source_data
 from app.processing.profiling import profile_column, score_value_profile_fit
 from app.config import config
 
@@ -46,6 +47,27 @@ W_METHOD = 0.20
 
 # Memory boost cap
 MEMORY_BOOST_CAP = 0.99
+
+# Below this value-profile fit, a non-empty column's values contradict the
+# target (e.g. building numbers 1..6 as "Building Value", $ amounts as
+# "Number of Buildings", longitudes as "Country"). Such candidates are vetoed
+# regardless of how well the header name matches.
+MIN_PROFILE_FIT = 0.25
+
+
+def _profile_contradicts(value_profile: Dict, vpf: float) -> bool:
+    return not value_profile.get("empty", False) and vpf < MIN_PROFILE_FIT
+
+
+def _profile_fit(value_profile: Dict, target: str) -> float:
+    """
+    Value-profile fit used for confidence. An empty column carries no evidence
+    either way, so it scores neutral (0.5) instead of 0 — otherwise an empty but
+    correctly named column ("No. of Bldgs") loses its target to any weak match.
+    """
+    if value_profile.get("empty", False):
+        return 0.5
+    return score_value_profile_fit(value_profile, target)
 
 
 # ---------------------------------------------------------------------------
@@ -153,37 +175,55 @@ def _stage1_exact(source_col: str) -> Optional[Tuple[str, float, List[str]]]:
 # Stage 2: Fuzzy matching
 # ---------------------------------------------------------------------------
 
-def _stage2_fuzzy(source_col: str) -> Optional[Tuple[str, float, List[str]]]:
-    """Returns (target, confidence, evidence) or None."""
+@lru_cache(maxsize=2048)
+def _stage2_fuzzy_candidates(source_col: str, limit: int = 5) -> Tuple[Tuple[str, float, Tuple[str, ...]], ...]:
+    """
+    Returns up to `limit` distinct-target candidates above the fuzzy threshold,
+    best first, as (target, confidence, evidence).
+    """
     try:
         from rapidfuzz import process, fuzz
     except ImportError:
         logger.warning("RapidFuzz not available — skipping fuzzy stage.")
-        return None
+        return ()
 
     texts, targets = get_corpus()
     norm_src = normalize(source_col)
     norm_texts = [normalize(t) for t in texts]
 
     # Use token_sort_ratio for flexibility
-    result = process.extractOne(
+    results = process.extract(
         norm_src,
         norm_texts,
         scorer=fuzz.token_sort_ratio,
         score_cutoff=int(config.FUZZY_THRESHOLD * 100),
+        limit=len(norm_texts),
     )
 
-    if result:
-        match_text, score, idx = result
+    candidates = []
+    seen: Set[str] = set()
+    for _match_text, score, idx in results:
         target = targets[idx]
-        confidence = score / 100.0
-        evidence = [
+        if target in seen:
+            continue
+        seen.add(target)
+        evidence = (
             f"Fuzzy match: '{source_col}' ≈ '{texts[idx]}' (score={score:.1f}%)",
             f"Matched target: '{target}'",
-        ]
-        return target, confidence * 0.92, evidence  # slight discount for fuzzy
+        )
+        candidates.append((target, (score / 100.0) * 0.92, evidence))  # slight discount for fuzzy
+        if len(candidates) >= limit:
+            break
+    return tuple(candidates)
 
-    return None
+
+def _stage2_fuzzy(source_col: str) -> Optional[Tuple[str, float, List[str]]]:
+    """Returns the best fuzzy (target, confidence, evidence) or None."""
+    candidates = _stage2_fuzzy_candidates(source_col)
+    if not candidates:
+        return None
+    target, conf, evidence = candidates[0]
+    return target, conf, list(evidence)
 
 
 # ---------------------------------------------------------------------------
@@ -211,38 +251,57 @@ def _get_corpus_embeddings():
         return None
 
 
-def _stage3_semantic(source_col: str) -> Optional[Tuple[str, float, List[str]]]:
-    """Returns (target, confidence, evidence) or None."""
+@lru_cache(maxsize=2048)
+def _stage3_semantic_candidates(source_col: str, limit: int = 5) -> Tuple[Tuple[str, float, Tuple[str, ...]], ...]:
+    """
+    Returns up to `limit` distinct-target candidates above the semantic
+    threshold, best first, as (target, confidence, evidence).
+    """
     try:
         from app.services.embeddings.encoder import embed_texts, batch_similarity
-        import numpy as np
 
         query_emb = embed_texts([source_col])
         if query_emb is None:
-            return None
+            return ()
 
         corpus_emb = _get_corpus_embeddings()
         if corpus_emb is None:
-            return None
+            return ()
 
         texts, targets = get_corpus()
         sims = batch_similarity(query_emb[0], corpus_emb)
+        order = sorted(range(len(sims)), key=lambda i: -sims[i])
 
-        best_idx = int(max(range(len(sims)), key=lambda i: sims[i]))
-        best_sim = sims[best_idx]
-
-        if best_sim >= config.SEMANTIC_THRESHOLD:
-            target = targets[best_idx]
-            evidence = [
-                f"Semantic similarity: '{source_col}' ↔ '{texts[best_idx]}' = {best_sim:.3f}",
+        candidates = []
+        seen: Set[str] = set()
+        for idx in order:
+            sim = sims[idx]
+            if sim < config.SEMANTIC_THRESHOLD:
+                break
+            target = targets[idx]
+            if target in seen:
+                continue
+            seen.add(target)
+            evidence = (
+                f"Semantic similarity: '{source_col}' ↔ '{texts[idx]}' = {sim:.3f}",
                 f"Matched target: '{target}'",
-            ]
-            return target, best_sim * 0.90, evidence  # slight discount for semantic
-
-        return None
+            )
+            candidates.append((target, sim * 0.90, evidence))  # slight discount for semantic
+            if len(candidates) >= limit:
+                break
+        return tuple(candidates)
     except Exception as e:
         logger.warning("Semantic stage failed: %s", e)
+        return ()
+
+
+def _stage3_semantic(source_col: str) -> Optional[Tuple[str, float, List[str]]]:
+    """Returns the best semantic (target, confidence, evidence) or None."""
+    candidates = _stage3_semantic_candidates(source_col)
+    if not candidates:
         return None
+    target, conf, evidence = candidates[0]
+    return target, conf, list(evidence)
 
 
 # ---------------------------------------------------------------------------
@@ -273,7 +332,8 @@ def _stage4_llm(
             if field in TARGET_DEFINITIONS
         )
 
-        sample_text = ", ".join(str(v) for v in sample_values[:5])
+        from app.services.llm.masking import mask_values
+        sample_text = ", ".join(mask_values(sample_values[:5]))
 
         messages = [
             {
@@ -344,13 +404,31 @@ def _compute_confidence(
 # Main mapping cascade for one column
 # ---------------------------------------------------------------------------
 
+def _unresolved(source_col: str, rationale: str, evidence: List[str]) -> ColumnMapping:
+    return ColumnMapping(
+        source_column=source_col,
+        target=None,
+        confidence=0.0,
+        method=MappingMethod.UNRESOLVED,
+        rationale=rationale,
+        evidence=evidence,
+        review_required=True,
+        value_profile_fit=0.0,
+        name_similarity=0.0,
+        method_agreement=0.0,
+    )
+
+
 def map_column(
     source_col: str,
     series: pd.Series,
     already_mapped: Set[str],
+    use_llm: bool = True,
 ) -> ColumnMapping:
     """
     Run the full cascade for a single source column.
+    Every name-based candidate is cross-checked against the column's values;
+    candidates whose value profile contradicts the target are vetoed.
     Returns a ColumnMapping.
     """
     # Profile values
@@ -360,124 +438,97 @@ def map_column(
 
     # Sample values (limited, for LLM)
     sample_values = list(series.dropna().astype(str).head(config.LLM_SAMPLE_ROWS))
+    vetoed: List[str] = []
 
     # --- Stage 0: Memory ---
     mem_result = _stage0_memory(source_col)
     if mem_result:
         target, conf, evidence = mem_result
         if target not in already_mapped:
-            vpf = score_value_profile_fit(value_profile, target)
-            final_conf = _compute_confidence(conf, vpf, 1.0, MappingMethod.MEMORY, memory_hit=True)
-            return ColumnMapping(
-                source_column=source_col,
-                target=target,
-                confidence=final_conf,
-                method=MappingMethod.MEMORY,
-                rationale=f"Retrieved from approved memory: {evidence[0]}",
-                evidence=evidence,
-                review_required=final_conf < config.HIGH_CONFIDENCE_THRESHOLD,
-                value_profile_fit=vpf,
-                name_similarity=conf,
-                method_agreement=1.0,
-            )
+            vpf = _profile_fit(value_profile, target)
+            if _profile_contradicts(value_profile, vpf):
+                vetoed.append(f"Memory suggested '{target}' but values contradict it (VPF={vpf:.2f}).")
+            else:
+                final_conf = _compute_confidence(conf, vpf, 1.0, MappingMethod.MEMORY, memory_hit=True)
+                return ColumnMapping(
+                    source_column=source_col,
+                    target=target,
+                    confidence=final_conf,
+                    method=MappingMethod.MEMORY,
+                    rationale=f"Retrieved from approved memory: {evidence[0]}",
+                    evidence=evidence,
+                    review_required=final_conf < config.HIGH_CONFIDENCE_THRESHOLD,
+                    value_profile_fit=vpf,
+                    name_similarity=conf,
+                    method_agreement=1.0,
+                )
 
     # --- Stage 1: Exact ---
     exact_result = _stage1_exact(source_col)
     if exact_result:
         target, name_sim, evidence = exact_result
         if target not in already_mapped:
-            vpf = score_value_profile_fit(value_profile, target)
-            final_conf = _compute_confidence(name_sim, vpf, 1.0, MappingMethod.EXACT)
-            return ColumnMapping(
+            vpf = _profile_fit(value_profile, target)
+            if _profile_contradicts(value_profile, vpf):
+                vetoed.append(f"Header matches '{target}' but values contradict it (VPF={vpf:.2f}).")
+            else:
+                final_conf = _compute_confidence(name_sim, vpf, 1.0, MappingMethod.EXACT)
+                return ColumnMapping(
+                    source_column=source_col,
+                    target=target,
+                    confidence=final_conf,
+                    method=MappingMethod.EXACT,
+                    rationale=f"Exact normalized match. VPF={vpf:.2f}.",
+                    evidence=evidence,
+                    review_required=final_conf < config.HIGH_CONFIDENCE_THRESHOLD,
+                    value_profile_fit=vpf,
+                    name_similarity=name_sim,
+                    method_agreement=1.0,
+                )
+
+    # --- Stage 2 + 3: Fuzzy and semantic candidates, scored jointly ---
+    fuzzy = {t: (c, list(e)) for t, c, e in _stage2_fuzzy_candidates(source_col)}
+    semantic = {t: (c, list(e)) for t, c, e in _stage3_semantic_candidates(source_col)}
+
+    best: Optional[ColumnMapping] = None
+    for target in list(dict.fromkeys(list(fuzzy) + list(semantic))):
+        if target in already_mapped:
+            continue
+        if target in fuzzy and target in semantic:
+            name_sim = (fuzzy[target][0] + semantic[target][0]) / 2
+            evidence = fuzzy[target][1] + semantic[target][1]
+            method, agreement = MappingMethod.FUZZY, 1.0
+        elif target in fuzzy:
+            name_sim, evidence = fuzzy[target]
+            method, agreement = MappingMethod.FUZZY, 0.7
+        else:
+            name_sim, evidence = semantic[target]
+            method, agreement = MappingMethod.SEMANTIC, 0.7
+
+        vpf = _profile_fit(value_profile, target)
+        if _profile_contradicts(value_profile, vpf):
+            vetoed.append(f"'{target}' ({method.value}) vetoed: values contradict it (VPF={vpf:.2f}).")
+            continue
+
+        final_conf = _compute_confidence(name_sim, vpf, agreement, method)
+        if final_conf >= 0.50 and (best is None or final_conf > best.confidence):
+            best = ColumnMapping(
                 source_column=source_col,
                 target=target,
                 confidence=final_conf,
-                method=MappingMethod.EXACT,
-                rationale=f"Exact normalized match. VPF={vpf:.2f}.",
-                evidence=evidence,
+                method=method,
+                rationale=f"Matched via {method.value}. VPF={vpf:.2f}.",
+                evidence=evidence + vetoed,
                 review_required=final_conf < config.HIGH_CONFIDENCE_THRESHOLD,
                 value_profile_fit=vpf,
                 name_similarity=name_sim,
-                method_agreement=1.0,
+                method_agreement=agreement,
             )
-
-    # --- Stage 2: Fuzzy ---
-    fuzzy_result = _stage2_fuzzy(source_col)
-    fuzzy_target = None
-    if fuzzy_result:
-        fuzzy_target, fuzzy_name_sim, fuzzy_evidence = fuzzy_result
-
-    # --- Stage 3: Semantic ---
-    semantic_result = _stage3_semantic(source_col)
-    semantic_target = None
-    if semantic_result:
-        semantic_target, semantic_name_sim, semantic_evidence = semantic_result
-
-    # Combine fuzzy + semantic
-    best_target = None
-    best_name_sim = 0.0
-    best_evidence: List[str] = []
-    method = MappingMethod.UNRESOLVED
-    method_agreement = 0.5
-
-    if fuzzy_target and semantic_target:
-        if fuzzy_target == semantic_target:
-            # Both agree
-            best_target = fuzzy_target
-            best_name_sim = (fuzzy_name_sim + semantic_name_sim) / 2
-            best_evidence = fuzzy_evidence + semantic_evidence
-            method = MappingMethod.FUZZY
-            method_agreement = 1.0
-        else:
-            # Disagreement — pick higher confidence
-            if fuzzy_name_sim >= semantic_name_sim:
-                best_target = fuzzy_target
-                best_name_sim = fuzzy_name_sim
-                best_evidence = fuzzy_evidence
-                method = MappingMethod.FUZZY
-                method_agreement = 0.6
-            else:
-                best_target = semantic_target
-                best_name_sim = semantic_name_sim
-                best_evidence = semantic_evidence
-                method = MappingMethod.SEMANTIC
-                method_agreement = 0.6
-    elif fuzzy_target:
-        best_target = fuzzy_target
-        best_name_sim = fuzzy_name_sim
-        best_evidence = fuzzy_evidence
-        method = MappingMethod.FUZZY
-        method_agreement = 0.8
-    elif semantic_target:
-        best_target = semantic_target
-        best_name_sim = semantic_name_sim
-        best_evidence = semantic_evidence
-        method = MappingMethod.SEMANTIC
-        method_agreement = 0.8
-
-    if best_target and best_target not in already_mapped:
-        vpf = score_value_profile_fit(value_profile, best_target)
-        final_conf = _compute_confidence(best_name_sim, vpf, method_agreement, method)
-
-        if final_conf >= 0.50:
-            return ColumnMapping(
-                source_column=source_col,
-                target=best_target,
-                confidence=final_conf,
-                method=method,
-                rationale=f"Matched via {method.value}. VPF={vpf:.2f}.",
-                evidence=best_evidence,
-                review_required=final_conf < config.HIGH_CONFIDENCE_THRESHOLD,
-                value_profile_fit=vpf,
-                name_similarity=best_name_sim,
-                method_agreement=method_agreement,
-            )
+    if best is not None:
+        return best
 
     # --- Stage 4: LLM ---
     candidates = []
-    if best_target:
-        candidates.append((best_target, best_name_sim))
-    # Add top value-profile candidates
     for field in TARGET_FIELDS:
         vpf_score = score_value_profile_fit(value_profile, field)
         if vpf_score > 0.35 and field not in already_mapped:
@@ -485,52 +536,38 @@ def map_column(
     candidates = sorted(candidates, key=lambda x: -x[1])[:5]
 
     # Only call LLM if there is a plausible candidate with reasonable signal
-    plausible = [c for c in candidates if c[1] >= 0.35]
-    if not plausible:
-        return ColumnMapping(
-            source_column=source_col,
-            target=None,
-            confidence=0.0,
-            method=MappingMethod.UNRESOLVED,
-            rationale="No candidate fields met minimum similarity threshold.",
-            evidence=["All mapping stages returned insufficient confidence."],
-            review_required=True,
-            value_profile_fit=0.0,
-            name_similarity=0.0,
-            method_agreement=0.0,
+    if not candidates:
+        return _unresolved(
+            source_col,
+            "No candidate fields met minimum similarity threshold.",
+            ["All mapping stages returned insufficient confidence."] + vetoed,
         )
 
-    llm_result = _stage4_llm(source_col, sample_values, plausible)
+    llm_result = _stage4_llm(source_col, sample_values, candidates) if use_llm else None
     if llm_result:
         llm_target, llm_conf, llm_evidence = llm_result
         if llm_target and llm_target not in already_mapped:
-            vpf = score_value_profile_fit(value_profile, llm_target)
-            final_conf = _compute_confidence(llm_conf, vpf, 0.7, MappingMethod.LLM)
-            return ColumnMapping(
-                source_column=source_col,
-                target=llm_target,
-                confidence=final_conf,
-                method=MappingMethod.LLM,
-                rationale=f"LLM reasoning. VPF={vpf:.2f}.",
-                evidence=llm_evidence,
-                review_required=True,  # LLM always requires review
-                value_profile_fit=vpf,
-                name_similarity=llm_conf,
-                method_agreement=0.7,
-            )
+            vpf = _profile_fit(value_profile, llm_target)
+            if not _profile_contradicts(value_profile, vpf):
+                final_conf = _compute_confidence(llm_conf, vpf, 0.7, MappingMethod.LLM)
+                return ColumnMapping(
+                    source_column=source_col,
+                    target=llm_target,
+                    confidence=final_conf,
+                    method=MappingMethod.LLM,
+                    rationale=f"LLM reasoning. VPF={vpf:.2f}.",
+                    evidence=llm_evidence,
+                    review_required=True,  # LLM always requires review
+                    value_profile_fit=vpf,
+                    name_similarity=llm_conf,
+                    method_agreement=0.7,
+                )
 
     # Unresolved
-    return ColumnMapping(
-        source_column=source_col,
-        target=None,
-        confidence=0.0,
-        method=MappingMethod.UNRESOLVED,
-        rationale="Could not confidently map this column to any target field.",
-        evidence=["All mapping stages failed or returned no match."],
-        review_required=True,
-        value_profile_fit=0.0,
-        name_similarity=0.0,
-        method_agreement=0.0,
+    return _unresolved(
+        source_col,
+        "Could not confidently map this column to any target field.",
+        ["All mapping stages failed or returned no match."] + vetoed,
     )
 
 
@@ -540,11 +577,18 @@ def map_column(
 
 def _apply_hungarian_assignment(
     mappings: List[ColumnMapping],
+    column_sheets: Optional[Dict[str, List[str]]] = None,
 ) -> List[ColumnMapping]:
     """
-    Ensure 1:1 mapping: if two source columns map to the same target,
-    keep the higher-confidence one and mark the other as unresolved.
+    Ensure 1:1 mapping: if two source columns from the same sheet map to the
+    same target, keep the higher-confidence one and mark the other as
+    unresolved. Columns from different merged sheets may share a target.
     """
+    column_sheets = column_sheets or {}
+
+    def sheets_of(col: str) -> Set[str]:
+        return set(column_sheets.get(col, ["_single_"]))
+
     target_to_cols: Dict[str, List[int]] = {}
     for i, m in enumerate(mappings):
         if m.target:
@@ -554,8 +598,13 @@ def _apply_hungarian_assignment(
         if len(indices) > 1:
             # Sort by confidence descending
             indices.sort(key=lambda i: -mappings[i].confidence)
-            # Keep best, demote rest
-            for i in indices[1:]:
+            # Keep the best per sheet, demote columns that collide with it
+            kept: List[int] = []
+            for i in indices:
+                rivals = [k for k in kept if sheets_of(mappings[k].source_column) & sheets_of(mappings[i].source_column)]
+                if not rivals:
+                    kept.append(i)
+                    continue
                 old_target = mappings[i].target
                 mappings[i] = mappings[i].model_copy(update={
                     "target": None,
@@ -563,7 +612,7 @@ def _apply_hungarian_assignment(
                     "method": MappingMethod.UNRESOLVED,
                     "rationale": (
                         f"Demoted: '{old_target}' already claimed by "
-                        f"'{mappings[indices[0]].source_column}' "
+                        f"'{mappings[rivals[0]].source_column}' "
                         f"with higher confidence."
                     ),
                     "review_required": True,
@@ -591,33 +640,72 @@ def run_schema_mapping(state: SOVState) -> SOVState:
         state.stage = WorkflowStage.ERROR
         return state
 
-    path = state.file_meta.temp_path
-    sheet_name = state.primary_sheet_name or ""
-    header_row = state.header_row
-
-    # Load cleaned DataFrame
+    # Load cleaned DataFrame (all data sheets, stacked)
     try:
-        df = unmerge_and_forward_fill(path, sheet_name)
-        if df.empty:
-            from app.processing.workbook import load_workbook_sheets
-            sheets = load_workbook_sheets(path)
-            df = sheets.get(sheet_name, pd.DataFrame())
+        data_df = load_source_data(state)
     except Exception as e:
         state.error_message = f"Failed to load sheet for mapping: {e}"
         state.stage = WorkflowStage.ERROR
         return state
-
-    data_df = extract_data_frame(df, header_row)
     source_columns = list(data_df.columns)
     logger.info("Mapping %d source columns.", len(source_columns))
 
-    # Run cascade for each column
-    raw_mappings: List[ColumnMapping] = []
-    already_mapped: Set[str] = set()
+    def column_series(col: str) -> pd.Series:
+        col_data = data_df[col]
+        if isinstance(col_data, pd.DataFrame):
+            col_data = col_data.iloc[:, 0]
+        return col_data
 
+    named_columns = [c for c in source_columns if c and not c.startswith("_col_")]
+
+    # Pass 1: score every column independently (no LLM), so the order in which
+    # targets are claimed reflects confidence rather than sheet position.
+    # Otherwise an early weak match (e.g. "Account Name" → Reference) blocks a
+    # later exact one ("Location ID" → Reference).
+    independent = {
+        col: map_column(col, column_series(col), set(), use_llm=False)
+        for col in named_columns
+    }
+    # Pass 2: assign targets 1:1, always committing the strongest pending
+    # column next. A column whose preferred target has been claimed is
+    # re-scored and re-queued at its new (lower) confidence, so its fallback
+    # never jumps ahead of a stronger column that wants the same target.
+    # Targets are 1:1 *within a sheet*. When several data sheets are merged,
+    # differently named columns from different sheets ("2023 Building Value",
+    # "Building Value") may each claim the same target; their rows never overlap.
+    column_sheets = data_df.attrs.get("column_sheets", {})
+
+    def sheets_of(col: str) -> Set[str]:
+        return set(column_sheets.get(col, ["_single_"]))
+
+    claimed: Dict[str, Set[str]] = {}
+
+    def blocked(col: str) -> Set[str]:
+        return {t for t, sh in claimed.items() if sh & sheets_of(col)}
+
+    current = dict(independent)
+    pending = set(named_columns)
+    by_column: Dict[str, ColumnMapping] = {}
+    while pending:
+        col = max(pending, key=lambda c: (current[c].confidence, -source_columns.index(c)))
+        mapping = current[col]
+        if mapping.target and mapping.target in blocked(col):
+            current[col] = map_column(col, column_series(col), blocked(col), use_llm=False)
+            continue
+        if mapping.target is None:
+            # Last resort for genuinely unresolved columns: LLM stage
+            mapping = map_column(col, column_series(col), blocked(col), use_llm=True)
+        pending.discard(col)
+        if mapping.target:
+            claimed.setdefault(mapping.target, set()).update(sheets_of(col))
+        by_column[col] = mapping
+
+    raw_mappings: List[ColumnMapping] = []
     for col in source_columns:
-        # Skip obviously bad column names
-        if not col or col.startswith("_col_"):
+        if col in by_column:
+            raw_mappings.append(by_column[col])
+        else:
+            # Skip obviously bad column names
             raw_mappings.append(ColumnMapping(
                 source_column=col,
                 target=None,
@@ -627,18 +715,9 @@ def run_schema_mapping(state: SOVState) -> SOVState:
                 evidence=[],
                 review_required=False,
             ))
-            continue
-
-        col_data = data_df[col]
-        if isinstance(col_data, pd.DataFrame):
-            col_data = col_data.iloc[:, 0]
-        mapping = map_column(col, col_data, already_mapped)
-        if mapping.target:
-            already_mapped.add(mapping.target)
-        raw_mappings.append(mapping)
 
     # Apply 1:1 constraint
-    final_mappings = _apply_hungarian_assignment(raw_mappings)
+    final_mappings = _apply_hungarian_assignment(raw_mappings, column_sheets)
 
     # Compute summary stats
     mapped = [m for m in final_mappings if m.target is not None]

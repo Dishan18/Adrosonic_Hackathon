@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 
 _client = None
 _collection = None
+_retrieve_cache: Dict[tuple, List[Dict]] = {}
 
 
 def _get_collection():
@@ -94,12 +95,19 @@ def retrieve_mapping(
         return []
 
     try:
-        norm = normalize_header(source_column)
+        count = collection.count()
+        if count == 0:
+            return []
 
-        # First: exact normalized match
+        # Chroma embeds every query (~0.8s on CPU). Cache per collection size:
+        # any newly approved mapping adds a document and invalidates the key.
+        cache_key = (source_column, top_k, count)
+        if cache_key in _retrieve_cache:
+            return [dict(m) for m in _retrieve_cache[cache_key]]
+
         results = collection.query(
             query_texts=[source_column],
-            n_results=min(top_k, max(1, collection.count())),
+            n_results=min(top_k, count),
             include=["metadatas", "distances", "documents"],
         )
 
@@ -122,7 +130,9 @@ def retrieve_mapping(
 
         # Filter to reasonable similarity
         matches = [m for m in matches if m["similarity"] > 0.5]
-        return sorted(matches, key=lambda x: x["similarity"], reverse=True)
+        matches = sorted(matches, key=lambda x: x["similarity"], reverse=True)
+        _retrieve_cache[cache_key] = matches
+        return [dict(m) for m in matches]
 
     except Exception as e:
         logger.error("Memory retrieval failed: %s", e)

@@ -341,7 +341,7 @@
   <header class="hero">
     <div class="hero-eyebrow">Technical Reference &bull; Mathematics & Complexity</div>
     <h1>Algorithmic Engine & Inner Agent Workings</h1>
-    <p>Comprehensive mathematical formulations, step-by-step pseudo-code, heuristics, confidence scoring calibration, and asymptotic time/space complexity analysis for all 5 agents.</p>
+    <p>Comprehensive mathematical formulations, step-by-step pseudo-code, heuristics, confidence scoring calibration, and asymptotic time/space complexity analysis for the four agents and the validation &amp; export step. Updated 2026-10-03 to match the code after the real-file audit.</p>
 
     <div class="nav-bar">
       <a href="#pipeline-flow" class="nav-btn">Pipeline Flow</a>
@@ -350,7 +350,7 @@
       <a href="#vpf-matrix" class="nav-btn">Value Profile Fit</a>
       <a href="#agent3-quality" class="nav-btn">Agent 3: Quality</a>
       <a href="#agent4-transform" class="nav-btn">Agent 4: Transform</a>
-      <a href="#agent5-validation" class="nav-btn">Agent 5: Validation</a>
+      <a href="#agent5-validation" class="nav-btn">Validation &amp; Export</a>
       <a href="#complexity-matrix" class="nav-btn">Complexity Matrix</a>
       <a href="guide.html" class="nav-btn" style="background:#0071E3; color:#fff;">System Guide &rarr;</a>
     </div>
@@ -361,7 +361,7 @@
     <h2>1. End-to-End Algorithmic Data Flow</h2>
     <div class="card">
       <p style="font-size: 14px; margin-bottom: 16px;">
-        The system models Statement of Values (SOV) processing as a deterministic state machine orchestrated via LangGraph. Each stage receives an immutable snapshot of <code>SOVState</code> and computes a strictly typed progression.
+        The system models Statement of Values (SOV) processing as a state machine orchestrated via LangGraph. Each node receives a deep copy of <code>SOVState</code> and writes only its own fields. The graph pauses (checkpointed) before the human review node and resumes into the transformation once the reviewer is done.
       </p>
 
       <table>
@@ -378,35 +378,35 @@
           <tr>
             <td><strong>01</strong></td>
             <td><strong>Sheet Intelligence</strong></td>
-            <td>Unmerges ranges, detects headers via 4-factor scoring, classifies tabs</td>
+            <td>Unmerges ranges (fill down), detects headers via 4-factor scoring, classifies tabs; all PRIMARY tabs become data sheets</td>
             <td>Read-Only (Generates clean DataFrame)</td>
             <td><span class="badge-pill badge-green">100% Deterministic</span></td>
           </tr>
           <tr>
             <td><strong>02</strong></td>
             <td><strong>Schema Mapping</strong></td>
-            <td>4-tier cascade: Memory &rarr; Exact &rarr; Fuzzy &rarr; Dense &rarr; LLM + Hungarian</td>
+            <td>Cascade: Memory &rarr; Exact &rarr; Fuzzy + Dense candidates &rarr; LLM; value-profile veto; confidence-ordered 1:1 assignment per sheet</td>
             <td>Read-Only (Proposes column mappings)</td>
             <td><span class="badge-pill badge-green">Deterministic (LLM fallback)</span></td>
           </tr>
           <tr>
             <td><strong>03</strong></td>
             <td><strong>Quality Reasoning</strong></td>
-            <td>Runs 10 deterministic checks, computes completeness & composite score</td>
+            <td>Runs 12 deterministic checks, computes completeness & composite score</td>
             <td>Read-Only (Proposes whitelisted operations)</td>
             <td><span class="badge-pill badge-green">Deterministic (LLM explains)</span></td>
           </tr>
           <tr>
             <td><strong>04</strong></td>
             <td><strong>Controlled Transformation</strong></td>
-            <td>Applies approved whitelisted functions, resolves duplicate collisions</td>
+            <td>Applies approved renames and whitelisted functions, audits every change before writing it</td>
             <td><span class="badge-pill badge-amber">Applies Mutations</span></td>
             <td><span class="badge-pill badge-green">100% Whitelist Only</span></td>
           </tr>
           <tr>
             <td><strong>05</strong></td>
-            <td><strong>Validation & Export</strong></td>
-            <td>Strict Pandera 17-column ordering, serialization to Cleaned_SOV.xlsx</td>
+            <td><strong>Validation & Export</strong> (end of Agent 4)</td>
+            <td>17-column ordering, Pandera + numeric type checks, serialization to Cleaned_SOV.xlsx</td>
             <td>Output Generation</td>
             <td><span class="badge-pill badge-green">100% Deterministic</span></td>
           </tr>
@@ -421,19 +421,19 @@
 
     <div class="card">
       <h3>
-        <span>1.1 Range Unmerging & Forward Fill Algorithm</span>
-        <span class="complexity-pill">Time: O(M &times; S) | Space: O(R &times; C)</span>
+        <span>1.1 Range Unmerging & Fill-Down Algorithm</span>
+        <span class="complexity-pill">Time: O(M &times; R<sub>m</sub> + R &times; C) | Space: O(R &times; C)</span>
       </h3>
       <p style="font-size: 14px; margin-bottom: 12px;">
-        Brokers frequently merge category cells across columns (e.g., merging columns D&ndash;F as "Values (USD)"). Standard pandas parsers fill only the top-left cell and leave subsequent cells as <code>NaN</code>.
+        Brokers merge cells both vertically (one Loc # spanning several building rows) and horizontally (a "2023 - 2024 Values" banner over D&ndash;F, or a footnote merged across B&ndash;AB). Only the vertical case carries a value that belongs to every row. Copying a horizontal merge across its columns writes banner or footnote text into unrelated fields; in <code>SOV_B4ID.xlsx</code> this produced Zip "20182" and Year Built 2018 from the note "updates in 2018 to 2019".
       </p>
 
       <ol class="algo-steps">
-        <li>Load workbook using <code>openpyxl.load_workbook(path, data_only=True)</code> to evaluate stored formulas.</li>
-        <li>Iterate over <code>ws.merged_cells.ranges</code>. For each cell range $(r_1, c_1) \dots (r_2, c_2)$, extract top-left value $V = \text{cell}(r_1, c_1)$.</li>
+        <li>Load the workbook once with <code>openpyxl.load_workbook(path, data_only=True)</code> (stored formula results). The parse is cached per (path, modification time) and shared by all agents.</li>
+        <li>Iterate over <code>ws.merged_cells.ranges</code>. For each range (r<sub>1</sub>, c<sub>1</sub>) &hellip; (r<sub>2</sub>, c<sub>2</sub>), read the top-left value V = cell(r<sub>1</sub>, c<sub>1</sub>).</li>
         <li>Unmerge the range using <code>ws.unmerge_cells(range_string)</code>.</li>
-        <li>Propagate $V$ into all $(r, c) \in [r_1, r_2] \times [c_1, c_2]$.</li>
-        <li>Convert worksheet values into a clean <code>pd.DataFrame</code>.</li>
+        <li>Write V into cell(r, c<sub>1</sub>) for every r &isin; [r<sub>1</sub>, r<sub>2</sub>]: fill <strong>down the first column only</strong>. Other columns of the range stay empty.</li>
+        <li>Convert worksheet values into a <code>pd.DataFrame</code>. After the header is applied, blank rows, total rows, note rows (a single non-numeric text cell) and whitespace-only rows are dropped.</li>
       </ol>
     </div>
 
@@ -443,7 +443,7 @@
         <span class="complexity-pill">Time: O(K &times; C) | Space: O(C)</span>
       </h3>
       <p style="font-size: 14px;">
-        The algorithm scans the first $K = 30$ rows of the unmerged worksheet to detect the true column header index, ignoring cover banners and corporate logos.
+        The algorithm scans the first K = 30 rows of the unmerged worksheet to detect the true column header index, ignoring cover banners and corporate logos.
       </p>
 
       <div class="formula-box">
@@ -498,6 +498,13 @@
           &bull; Otherwise &rArr; <strong style="color:var(--accent-red);">REJECT (Skip Tab)</strong>
         </div>
       </div>
+
+      <div class="formula-box" style="border-left-color: var(--accent-purple);">
+        <div class="formula-title">Data Sheets (multi-tab merge)</div>
+        <div class="formula-desc">
+          The best-scoring PRIMARY sheet is <code>primary_sheet_name</code>. <strong>Every</strong> PRIMARY sheet is a data sheet: each is extracted with its own header row and the frames are stacked into one table (columns aligned by header name). For <code>SOV_Q8B3.xlsx</code> this merges <code>23-24 Values</code>, <code>Deleted Locations</code> and <code>Insured Elsewhere</code> into 990 rows. Hidden sheets are scored like any other.
+        </div>
+      </div>
     </div>
   </section>
 
@@ -507,11 +514,11 @@
 
     <div class="card">
       <h3>
-        <span>2.1 The 4-Tier Resolution Cascade</span>
+        <span>2.1 The Resolution Cascade</span>
         <span class="complexity-pill">Worst: O(C &times; (K<sub>syn</sub> + D + LLM)) | Avg: O(C)</span>
       </h3>
       <p style="font-size: 14px; margin-bottom: 14px;">
-        For each source column $c$, the agent executes a sequential cascade, stopping at the earliest decisive match or combining signals:
+        For each source column, memory and exact matches are decisive when the column's values agree. Otherwise up to five fuzzy and five semantic candidate targets are scored together and the best one (confidence &ge; 0.50) is taken. A candidate whose values contradict the field is vetoed at every tier (section 2.2).
       </p>
 
       <table>
@@ -520,45 +527,45 @@
             <th>Tier</th>
             <th>Method</th>
             <th>Algorithm / Mechanism</th>
-            <th>Latency</th>
-            <th>Base Confidence</th>
+            <th>Cost</th>
+            <th>Name Similarity S<sub>name</sub></th>
           </tr>
         </thead>
         <tbody>
           <tr>
             <td><strong>Tier 0</strong></td>
             <td><strong>Vector Memory</strong></td>
-            <td>ChromaDB exact/cosine recall on prior human approvals</td>
-            <td>&lt; 2 ms</td>
-            <td><code>min(0.99, conf &times; 1.10)</code></td>
+            <td>ChromaDB nearest neighbour over human-approved mappings; hit if similarity (1 &minus; d/2) &gt; 0.85</td>
+            <td>One Chroma query per header; skipped when the store is empty, cached per header</td>
+            <td><code>min(stored_conf, 0.99)</code>; final confidence &times; 1.10 (cap 0.99)</td>
           </tr>
           <tr>
             <td><strong>Tier 1</strong></td>
             <td><strong>Exact Match</strong></td>
-            <td>$O(1)$ Hash table lookup against canonical names & 80+ synonyms</td>
-            <td>&lt; 0.05 ms</td>
+            <td>O(1) hash lookup of the normalized header against the 17 canonical names and 130 synonyms</td>
+            <td>Constant</td>
             <td><code>0.97</code></td>
           </tr>
           <tr>
             <td><strong>Tier 2</strong></td>
             <td><strong>Fuzzy Match</strong></td>
-            <td>RapidFuzz <code>token_sort_ratio</code> with score cutoff &ge; 78</td>
-            <td>~ 0.5 ms</td>
+            <td>RapidFuzz <code>token_sort_ratio</code>, cutoff &ge; <code>FUZZY_THRESHOLD</code> &times; 100 (75); top 5 distinct targets</td>
+            <td>CPU string comparison, cached per header</td>
             <td><code>(score / 100) &times; 0.92</code></td>
           </tr>
           <tr>
             <td><strong>Tier 3</strong></td>
             <td><strong>Semantic Vector</strong></td>
-            <td>Dense cosine similarity using <code>BAAI/bge-small-en-v1.5</code> (384-d)</td>
-            <td>~ 5 ms</td>
-            <td><code>cosine_sim &times; 0.90</code></td>
+            <td>Cosine similarity with <code>BAAI/bge-small-en-v1.5</code> (384-d), cutoff &ge; <code>SEMANTIC_THRESHOLD</code> (0.70); top 5 distinct targets</td>
+            <td>CPU embedding, cached per header</td>
+            <td><code>cosine_sim &times; 0.90</code> (average with fuzzy if both find the target)</td>
           </tr>
           <tr>
             <td><strong>Tier 4</strong></td>
             <td><strong>LLM Gateway</strong></td>
-            <td>Few-shot structured JSON extraction (Mistral 7B / Llama 3 70B)</td>
-            <td>~ 400&ndash;1800 ms</td>
-            <td><code>llm_conf &times; 0.85</code></td>
+            <td>Structured JSON decision (Ollama / Groq / Gemini) among fields with value fit &gt; 0.35; only for columns still unresolved; masked sample values</td>
+            <td>Network or local model call</td>
+            <td><code>llm_conf &times; 0.85</code> (always requires review)</td>
           </tr>
         </tbody>
       </table>
@@ -581,32 +588,41 @@
         <div class="formula-desc">
           <strong>Weight Distribution:</strong><br>
           &bull; <code>W<sub>name</sub> = 0.45</code>: Lexical/Semantic name similarity score.<br>
-          &bull; <code>W<sub>value</sub> = 0.35</code>: Value Profile Fit (VPF) score ($0.0 \dots 1.0$).<br>
-          &bull; <code>W<sub>method</sub> = 0.20</code>: Method agreement factor ($1.0$ if memory/exact hit or fuzzy & semantic agree; $0.8$ if single heuristic matches; $0.6$ on heuristic clash).<br>
-          &bull; <strong>Memory Multiplier:</strong> If retrieved from approved memory: <code>Confidence &larr; min(0.99, Confidence &times; 1.10)</code>.
+          &bull; <code>W<sub>value</sub> = 0.35</code>: Value Profile Fit (VPF) score (0.0 &hellip; 1.0).<br>
+          &bull; <code>W<sub>method</sub> = 0.20</code>: Method agreement factor (1.0 for memory, exact, or a target found by both fuzzy and semantic; 0.7 for a target found by only one of them, and for LLM).<br>
+          &bull; <strong>Memory Multiplier:</strong> If retrieved from approved memory: <code>Confidence &larr; min(0.99, Confidence &times; 1.10)</code>.<br>
+          &bull; <strong>Empty columns:</strong> V<sub>profile</sub> counts as a neutral 0.5, so a correctly named but empty column ("No. of Bldgs") is not out-ranked by weak matches.<br>
+          &bull; <code>review_required = Confidence &lt; 0.90</code> (<code>HIGH_CONFIDENCE_THRESHOLD</code>).
+        </div>
+      </div>
+
+      <div class="formula-box" style="border-left-color: var(--accent-red);">
+        <div class="formula-title">Value-Profile Veto</div>
+        <div class="formula-desc">
+          If the column has data and V<sub>profile</sub>(T) &lt; 0.25 (<code>MIN_PROFILE_FIT</code>), the candidate T is rejected no matter how well the header matches, at every tier including memory and LLM. Real cases: building numbers 1&ndash;6 under <code>Bldg.</code> as Building Value, $ amounts under <code>Building</code> as Number of Buildings, longitudes as Country. The reason is kept in the mapping evidence.
         </div>
       </div>
     </div>
 
     <div class="card">
       <h3>
-        <span>2.3 1:1 Target Uniqueness (Hungarian Conflict Resolution)</span>
-        <span class="complexity-pill">Time: O(T &times; K log K) | Space: O(C)</span>
+        <span>2.3 1:1 Target Uniqueness (Confidence-Ordered Assignment)</span>
+        <span class="complexity-pill">Time: O(C &times; P) worst | Space: O(C)</span>
       </h3>
       <p style="font-size: 14px; margin-bottom: 12px;">
-        Insurance underwriting schemas forbid multiple source columns from populating the same target field (e.g. if a broker has "Building Value" and "TIV Building", both cannot map to <code>Building Value</code>).
+        Within one sheet, two source columns may not populate the same target. Assigning targets left to right lets a weak early match block a strong later one: in <code>SOV_K4T9.xlsx</code>, <code>Account Name</code> ("Client A") took Reference and the exact synonym <code>Location ID</code> was left unmapped. Assignment is therefore ordered by confidence (a greedy approximation, not the Hungarian algorithm).
       </p>
-      
+
       <div class="formula-box" style="border-left-color: var(--accent-purple);">
-        <div class="formula-title">Assignment Heuristic</div>
+        <div class="formula-title">Assignment Algorithm</div>
         <div class="formula-desc">
-          For each target field $T \in \text{TARGET\_FIELDS}$:
           <ol style="margin-left: 20px; margin-top: 6px;">
-            <li>Find all source columns $\{C_1, C_2, \dots, C_k\}$ assigned to $T$.</li>
-            <li>If $k > 1$: Sort candidates in descending order of calibrated confidence.</li>
-            <li>Assign $T$ to $C^* = \arg\max_i \text{Confidence}(C_i \to T)$.</li>
-            <li>Demote all competing columns $C_{j \ne *}$ to <code>UNRESOLVED</code> with <code>confidence = 0.0</code> and note the demotion reason in the audit trail.</li>
+            <li><strong>Pass 1:</strong> score every named column independently (no LLM).</li>
+            <li><strong>Pass 2:</strong> repeatedly take the pending column with the highest current confidence. If its target is already claimed by a column from an overlapping sheet, re-score it with that target excluded and return it to the queue at its new confidence; otherwise commit it. A column still unresolved at its turn gets the LLM tier.</li>
+            <li>Targets are unique <strong>per sheet</strong>: columns from different merged sheets (never on the same row) may share a target, e.g. <code>2023 Building Value</code> and <code>Building Value</code>; Agent 4 coalesces them.</li>
+            <li>A final safety pass demotes any remaining same-sheet duplicate to <code>UNRESOLVED</code> with the reason in its rationale.</li>
           </ol>
+          P = number of re-scorings (bounded by C &times; 17).
         </div>
       </div>
     </div>
@@ -618,7 +634,7 @@
 
     <div class="card">
       <p style="font-size: 14px; margin-bottom: 14px;">
-        To prevent absurd false positives (e.g., mapping a column named "State" containing large numbers $50,000,000 to the geographic field <code>State</code>), the profiler analyzes actual cell values against target field expectation profiles.
+        To prevent absurd false positives (e.g., mapping a column named "Bldg." that holds building numbers 1&ndash;6 to <code>Building Value</code>), the profiler analyzes actual cell values against each target's expected profile. Ratios are fractions of the column's non-empty values. Exact formulas from <code>score_value_profile_fit</code> (result capped to 0&ndash;1):
       </p>
 
       <table>
@@ -631,44 +647,54 @@
         </thead>
         <tbody>
           <tr>
-            <td><code>Building Value</code>, <code>Contents</code>, <code>BI</code></td>
-            <td>Numeric, currency symbols (<code>$</code>, <code>,</code>), values &ge; 1,000</td>
-            <td><code>0.5 &times; monetary_ratio + 0.3 &times; numeric_ratio + 0.2 &times; (mean &ge; 1000)</code><br>Heavy penalty if negative values or text ratio &gt; 20%.</td>
+            <td><code>Building Value</code>, <code>Contents</code>, <code>BI</code>, <code>Other</code></td>
+            <td>Numeric values, magnitude &ge; 100 ("monetary")</td>
+            <td><code>0.6 &times; monetary_ratio + 0.4 &times; numeric_ratio</code>, halved if any value is negative.</td>
           </tr>
           <tr>
             <td><code>Year Built</code></td>
-            <td>4-digit integers between 1700 and current year</td>
-            <td><code>year_ratio &times; 0.90 + 0.10</code> if strictly integers in range. <code>0.0</code> if text strings.</td>
+            <td>4-digit years between 1700 and current year + 1</td>
+            <td><code>year_ratio</code>, plus 0.3 if &gt;80% numeric and min/max are within range.</td>
           </tr>
           <tr>
             <td><code>Zip</code></td>
-            <td>5-digit integers, ZIP+4 patterns, string length 5</td>
-            <td><code>zip_ratio &times; 0.90 + 0.10</code> if &ge;80% 5-digit digits.</td>
+            <td>5-digit codes, ZIP+4; 3&ndash;4 digit integers (leading zeros lost in Excel)</td>
+            <td><code>z = max(zip5_ratio, 0.6 &times; short_zip_ratio)</code>; score <code>z</code> if z &gt; 0.5, else <code>z &times; (1 &minus; min(0.5, monetary_ratio))</code>.</td>
           </tr>
           <tr>
             <td><code>State</code></td>
-            <td>2-letter uppercase codes matching 50 US states</td>
-            <td><code>state_ratio &times; 0.95</code>. High penalty if mean string length &gt; 15.</td>
+            <td>US state / territory codes; dots and spaces ignored (<code>V.I.</code> &rarr; VI)</td>
+            <td><code>state_ratio</code>.</td>
           </tr>
           <tr>
             <td><code>Fire Sprinklers (Y/N)</code></td>
-            <td>Values in <code>{"Y", "N", "YES", "NO", "Y13", "1", "0"}</code></td>
-            <td><code>0.7 &times; sprinkler_ratio + 0.3 &times; yn_ratio</code>.</td>
+            <td>Y, N, YES, NO, Y13, Y(13R), TRUE, FALSE, 1, 0, SPRINKLERED&hellip;</td>
+            <td><code>min(1, sprinkler_ratio + 0.3 &times; yn_ratio)</code>.</td>
           </tr>
           <tr>
             <td><code>Storeys</code>, <code>Number of Buildings</code></td>
-            <td>Small positive integers (1 to 150)</td>
-            <td><code>0.6 &times; storey_ratio + 0.4 &times; (max &le; 150 & all_integers)</code>.</td>
+            <td>Integers 1 to 200</td>
+            <td><code>storey_ratio</code>, plus 0.2 if &gt;80% numeric.</td>
           </tr>
           <tr>
             <td><code>Reference</code></td>
-            <td>High cardinality, unique row identifier</td>
-            <td><code>unique_ratio &times; 0.85</code> (near 1.0 uniqueness).</td>
+            <td>Any identifier; repeats allowed (several buildings per location)</td>
+            <td>0.2 if &gt;80% numeric with fractions (coordinates, amounts); otherwise <code>0.5 + 0.5 &times; unique_ratio</code>.</td>
           </tr>
           <tr>
             <td><code>Address</code></td>
-            <td>Mixed digits and street keywords (St, Ave, Blvd, Rd)</td>
-            <td><code>address_ratio &times; 0.90</code>.</td>
+            <td>Digits followed by words, or street keywords (St, Ave, Blvd, Rd&hellip;)</td>
+            <td><code>address_ratio</code>, at least 0.3 for text columns (&lt;20% numeric).</td>
+          </tr>
+          <tr>
+            <td><code>City</code>, <code>County</code>, <code>Country</code></td>
+            <td>Text</td>
+            <td>0 if &gt;80% numeric; otherwise <code>0.7 &times; (1 &minus; numeric_ratio) + 0.3 &times; (1 &minus; monetary_ratio)</code>.</td>
+          </tr>
+          <tr>
+            <td><code>Occupancy</code>, <code>Construction</code></td>
+            <td>Text or numeric class codes</td>
+            <td><code>0.7 &times; (1 &minus; numeric_ratio) + 0.3 &times; (1 &minus; monetary_ratio)</code>.</td>
           </tr>
         </tbody>
       </table>
@@ -685,7 +711,7 @@
         <span class="complexity-pill">Time: O(R &times; F) | Space: O(F)</span>
       </h3>
       <p style="font-size: 14px; margin-bottom: 12px;">
-        Agent 3 evaluates 10 strict data quality checks over the mapped dataset:
+        Agent 3 evaluates 12 deterministic data quality checks over the mapped dataset:
       </p>
 
       <div class="grid-2">
@@ -698,19 +724,19 @@
         <div style="background:var(--bg); padding:14px; border-radius:8px; border:1px solid var(--border);">
           <strong style="font-size:13px; color:var(--text-dark);">2. Monetary Validations:</strong>
           <p style="font-size:12.5px; color:var(--text-muted); margin-top:4px;">
-            Detects unparsed currency signs (<code>$</code>, <code>,</code>) &rarr; suggests <code>strip_currency</code>. Detects negative monetary exposures &rarr; flags <code>HIGH</code> risk.
+            Detects unparsed currency signs (<code>$</code>, <code>,</code>) &rarr; suggests <code>strip_currency</code>. Detects negative monetary exposures, including accounting <code>(1,000)</code> &rarr; flags <code>HIGH</code> risk. Detects non-numeric text such as <code>TBD</code> or <code>Included in Bldg</code> &rarr; flags <code>MEDIUM</code> for review.
           </p>
         </div>
         <div style="background:var(--bg); padding:14px; border-radius:8px; border:1px solid var(--border);">
           <strong style="font-size:13px; color:var(--text-dark);">3. Temporal & Physical Limits:</strong>
           <p style="font-size:12.5px; color:var(--text-muted); margin-top:4px;">
-            Year Built outside [1700, Current Year] &rarr; suggests <code>to_year_int</code>. Storey counts &lt; 1 or Building counts &lt; 1 &rarr; flags logical error.
+            Year Built outside [1700, Current Year] or not a year &rarr; suggests <code>to_year_int</code>. Storey counts &lt; 1 or non-numeric, Building counts &lt; 1 &rarr; flags logical error. Non-integer values in integer fields &rarr; suggests <code>to_int</code> (fractions are kept, never truncated).
           </p>
         </div>
         <div style="background:var(--bg); padding:14px; border-radius:8px; border:1px solid var(--border);">
           <strong style="font-size:13px; color:var(--text-dark);">4. Standard Codes & Geographic Integrity:</strong>
           <p style="font-size:12.5px; color:var(--text-muted); margin-top:4px;">
-            Non-standard sprinkler codes &rarr; suggests <code>normalize_sprinkler_code</code>. Full state names &rarr; suggests <code>state_to_abbrev</code>. 9-digit or malformed ZIPs &rarr; suggests <code>to_zip</code>.
+            Non-standard sprinkler codes &rarr; suggests <code>normalize_sprinkler_code</code>. Full or dotted state names (<code>V.I.</code>) &rarr; suggests <code>state_to_abbrev</code>. ZIPs that are not 5 digits &rarr; suggests <code>to_zip</code>. Duplicate references &rarr; flags <code>HIGH</code>. Missing values (&gt;5% / 20% / 50%) &rarr; flags LOW / MEDIUM / HIGH.
           </p>
         </div>
       </div>
@@ -722,7 +748,7 @@
         <span class="complexity-pill">Range: 0.0 &ndash; 100.0</span>
       </h3>
       <p style="font-size: 14px;">
-        The system outputs an underwriting confidence score summarizing the global integrity of the submission:
+        The system outputs one score summarizing the integrity of the submission. Agent 3 stores it in the quality report and the UI shows the same number (<code>compute_sov_quality_score</code>):
       </p>
 
       <div class="formula-box">
@@ -732,11 +758,11 @@
         </div>
         <div class="formula-desc">
           <strong>Component Breakdown:</strong><br>
-          &bull; <code>Q<sub>mapping</sub> = (&sum;<sub>m &isin; mapped</sub> Confidence(m)) / 17</code>: Ratio of successfully matched schema dimensions.<br>
-          &bull; <code>Q<sub>completeness</sub> = (&sum;<sub>f &isin; fields</sub> NonNullRate(f)) / (17 &times; 100)</code>: Aggregate matrix fill density.<br>
+          &bull; <code>Q<sub>mapping</sub> = (|mapped| / 17) &times; mean Confidence(mapped)</code>: coverage times average mapping confidence.<br>
+          &bull; <code>Q<sub>completeness</sub> = (&sum;<sub>f &isin; 17 fields</sub> NonNullPct(f) / 100) / 17</code>: unmapped fields count as 0.<br>
           &bull; <code>Q<sub>anomalies</sub> = max(0.0, 1.0 - &sum;<sub>i &isin; issues</sub> w(i))</code>: Penalty reduction where:<br>
-          &nbsp;&nbsp;&ndash; <code>w(High) = 0.15</code> per critical anomaly (e.g. duplicate IDs, negative values)<br>
-          &nbsp;&nbsp;&ndash; <code>w(Medium) = 0.05</code> per format/code issue (e.g. unstripped currency)<br>
+          &nbsp;&nbsp;&ndash; <code>w(High) = 0.20</code> per critical anomaly (e.g. duplicate IDs, negative values)<br>
+          &nbsp;&nbsp;&ndash; <code>w(Medium) = 0.08</code> per format/code issue (e.g. unstripped currency)<br>
           &nbsp;&nbsp;&ndash; <code>w(Low) = 0.02</code> per minor type mismatch
         </div>
       </div>
@@ -756,25 +782,28 @@
         Agent 4 executes <strong>only after human approval</strong>. To eliminate generative hallucinations, transformations operate within a sandboxed functional registry:
       </p>
 
-      <pre><code># The Transformation Sandbox Execution Pipeline
-def apply_approved_transformations(df: pd.DataFrame, approved_recs: List[Recommendation]):
+      <pre><code># The Transformation Sandbox Execution Pipeline (simplified from _apply_approved_transformations)
+def apply_approved_transformations(df, approved_recs):
+    # 1. Renames: approved COLUMN_MAPPING recs, highest confidence first,
+    #    one claim per target per sheet; columns from different sheets coalesced
+    df = rename_and_coalesce(df, approved_pairs)
+
+    # 2. Whitelisted operations on approved STANDARDISATION / DATA_CORRECTION recs
     for rec in approved_recs:
-        if rec.status != RecommendationStatus.APPROVED:
-            continue
-        
-        # Security invariant: Refuse unlisted functions
         if rec.operation not in WHITELISTED_OPERATIONS:
-            raise SecurityException(f"Illegal operation '{rec.operation}' rejected.")
-            
-        target_series = df[rec.target_column]
-        before_snapshot = target_series.copy()
-        
-        # Execute pure deterministic vector transformation
-        df[rec.target_column] = apply_transformation_to_series(rec.operation, target_series)
-        
-        # Measure row-level mutation mask & compile audit entry
-        diff_mask = (df[rec.target_column] != before_snapshot) & target_series.notna()
-        record_audit_log(rec, rows_modified=int(diff_mask.sum()))</code></pre>
+            logger.error("Operation %s not in whitelist - REFUSING to apply", rec.operation)
+            continue                                  # skipped, never executed
+        if rec.operation == "flag_for_review":
+            continue                                  # identity: nothing to change
+
+        before = df[rec.target_column].astype(object)
+        after = apply_transformation_to_series(rec.operation, before).astype(object)
+
+        # Audit FIRST: count changed rows and sample the first changed row,
+        # then write back, so no change can exist without its audit entry
+        changed = [not same(a, b) for a, b in zip(after, before)]
+        audit_entries.append(create_audit_entry(rec, rows_changed=sum(changed), ...))
+        df[rec.target_column] = after</code></pre>
     </div>
 
     <div class="card">
@@ -789,9 +818,10 @@ def apply_approved_transformations(df: pd.DataFrame, approved_recs: List[Recomme
       <div class="formula-box" style="border-left-color: var(--accent-amber);">
         <div class="formula-title">Collision Resolution Algorithm</div>
         <div class="formula-desc">
-          1. <strong>Header Deduplication:</strong> During initial extraction, headers are scanned. If header $H$ exists $k$ times, suffix indices $H, H\_1, H\_2, \dots$ are assigned.<br>
-          2. <strong>Series Slicing Disambiguation:</strong> If <code>isinstance(df[col], pd.DataFrame)</code> occurs at runtime, the agent evaluates <code>notna().sum()</code> across all candidate column slices, retains the slice with maximum non-null data volume, and drops redundant empty duplicates.<br>
-          3. <strong>Target Renaming Protection:</strong> If a source column is renamed to target $T$ while an existing column is already named $T$, the existing column is proactively isolated to <code>_orig_{T}</code>.
+          1. <strong>Header Deduplication:</strong> During extraction, if header H appears k times the copies are named <code>H</code>, <code>H (1)</code>, <code>H (2)</code>, &hellip;<br>
+          2. <strong>Series Slicing Disambiguation:</strong> If <code>isinstance(df[col], pd.DataFrame)</code> occurs at runtime, the agent evaluates <code>notna().sum()</code> across all candidate column slices and retains the slice with the most non-null values.<br>
+          3. <strong>Stray Target Names:</strong> Any source column whose name equals a target field but whose own mapping was not approved (rejected, unreviewed or unmapped, e.g. a raw <code>State</code> column) is renamed to <code>_unmapped_{name}</code> before renaming, so it can never reach the output.<br>
+          4. <strong>Per-Sheet Coalescing:</strong> When columns from different merged sheets map to one target, <code>rename_and_coalesce</code> combines them into a single column (rows never overlap; the higher-confidence source wins if they ever do).
         </div>
       </div>
     </div>
@@ -799,7 +829,7 @@ def apply_approved_transformations(df: pd.DataFrame, approved_recs: List[Recomme
 
   <!-- Section 7: Agent 5 - Validation & Export -->
   <section id="agent5-validation">
-    <h2><span class="badge-agent">Agent 5</span> Validation & Export Engine</h2>
+    <h2><span class="badge-agent">Agent 4</span> Validation & Export Step</h2>
 
     <div class="card">
       <h3>
@@ -807,7 +837,7 @@ def apply_approved_transformations(df: pd.DataFrame, approved_recs: List[Recomme
         <span class="complexity-pill">Time: O(R &times; 17) | Space: O(1)</span>
       </h3>
       <p style="font-size: 14px; margin-bottom: 12px;">
-        Before any file is written to disk, the DataFrame must pass strict validation against the Pandera 17-column specification:
+        Before the files are written, the DataFrame is validated against the 17-column specification and the field types:
       </p>
 
       <ol class="algo-steps">
@@ -818,6 +848,9 @@ def apply_approved_transformations(df: pd.DataFrame, approved_recs: List[Recomme
         <li><strong>Null Padding:</strong> Any unmapped canonical column is initialized as an empty series with dtype object (represented as clean Excel blanks).</li>
         <li><strong>Pruning:</strong> Excess raw columns not approved for inclusion are safely dropped.</li>
         <li><strong>Pandera Lazy Validation:</strong> <code>DataFrameSchema(columns={col: Column(nullable=True, required=True)}, strict=True, ordered=True).validate(df, lazy=True)</code>.</li>
+        <li><strong>Type Conformance:</strong> every non-null value of Building Value, Contents, BI and Other must be numeric; of Zip, Storeys, Number of Buildings and Year Built, integral. Each failure is reported, e.g. <code>Storeys: 1 non-integer value(s), e.g. 1.5</code>.</li>
+        <li><strong>Merged-cell check:</strong> the written workbook is re-opened; any merged range is a validation error.</li>
+        <li><strong>Serialization:</strong> <code>Cleaned_SOV.xlsx</code> (plus a timestamped copy) is written even when validation fails (stage <code>VALIDATING</code>) so the reviewer can inspect the problems; numeric Zip cells get Excel format <code>00000</code> (802 displays as 00802).</li>
       </ol>
     </div>
   </section>
@@ -828,7 +861,7 @@ def apply_approved_transformations(df: pd.DataFrame, approved_recs: List[Recomme
 
     <div class="card">
       <p style="font-size: 14px; margin-bottom: 14px;">
-        Summary of computational costs across the entire multi-agent system. Let $R$ = total rows, $C$ = total raw columns, $S$ = number of sheets in workbook, $K$ = max header scan depth ($K=30$), $D$ = embedding dimensions ($D=384$), and $T$ = canonical target fields ($T=17$).
+        Summary of computational costs across the entire multi-agent system. Let R = total rows, C = total raw columns, S = number of sheets in workbook, K = max header scan depth (K=30), D = embedding dimensions (D=384), and T = canonical target fields (T=17).
       </p>
 
       <table>
@@ -844,87 +877,87 @@ def apply_approved_transformations(df: pd.DataFrame, approved_recs: List[Recomme
         <tbody>
           <tr>
             <td><strong>OpenPyXL Unmerging</strong></td>
-            <td>$O(R \times C)$</td>
-            <td>$O(R \times C)$</td>
-            <td>$O(R \times C + M)$</td>
-            <td>$O(R \times C)$</td>
+            <td>O(R &times; C)</td>
+            <td>O(R &times; C)</td>
+            <td>O(R &times; C + M)</td>
+            <td>O(R &times; C)</td>
           </tr>
           <tr>
             <td><strong>Header Detection</strong></td>
-            <td>$O(C)$</td>
-            <td>$O(K \times C)$</td>
-            <td>$O(K \times C)$</td>
-            <td>$O(C)$</td>
+            <td>O(C)</td>
+            <td>O(K &times; C)</td>
+            <td>O(K &times; C)</td>
+            <td>O(C)</td>
           </tr>
           <tr>
             <td><strong>Sheet Scoring</strong></td>
-            <td>$O(S \times C)$</td>
-            <td>$O(S \times (K \cdot C + 200 \cdot C))$</td>
-            <td>$O(S \times R \cdot C)$</td>
-            <td>$O(S)$</td>
+            <td>O(S &times; C)</td>
+            <td>O(S &times; (K &middot; C + 200 &middot; C))</td>
+            <td>O(S &times; R &middot; C)</td>
+            <td>O(S)</td>
           </tr>
           <tr>
             <td><strong>Exact Schema Lookup</strong></td>
-            <td>$O(C)$</td>
-            <td>$O(C)$</td>
-            <td>$O(C)$</td>
-            <td>$O(K_{\text{synonyms}})$</td>
+            <td>O(C)</td>
+            <td>O(C)</td>
+            <td>O(C)</td>
+            <td>O(K<sub>synonyms</sub>)</td>
           </tr>
           <tr>
             <td><strong>RapidFuzz Matching</strong></td>
-            <td>$O(C)$</td>
-            <td>$O(C \times K_{\text{corpus}} \cdot L)$</td>
-            <td>$O(C \times K_{\text{corpus}} \cdot L^2)$</td>
-            <td>$O(K_{\text{corpus}})$</td>
+            <td>O(C)</td>
+            <td>O(C &times; K<sub>corpus</sub> &middot; L)</td>
+            <td>O(C &times; K<sub>corpus</sub> &middot; L<sup>2</sup>)</td>
+            <td>O(K<sub>corpus</sub>)</td>
           </tr>
           <tr>
             <td><strong>Dense Vector Embedding</strong></td>
-            <td>$O(1)$ <span class="badge-pill badge-green">Cached</span></td>
-            <td>$O(C \times D)$</td>
-            <td>$O(C \times D \cdot K_{\text{corpus}})$</td>
-            <td>$O(K_{\text{corpus}} \times D)$</td>
+            <td>O(1) <span class="badge-pill badge-green">Cached</span></td>
+            <td>O(C &times; D)</td>
+            <td>O(C &times; D &middot; K<sub>corpus</sub>)</td>
+            <td>O(K<sub>corpus</sub> &times; D)</td>
           </tr>
           <tr>
             <td><strong>LLM Inference (Ambiguous)</strong></td>
-            <td>$O(1)$ <span class="badge-pill badge-green">Skipped</span></td>
-            <td>$O(C_{\text{unresolved}} \times \tau_{\text{LLM}})$</td>
-            <td>$O(C \times \tau_{\text{LLM}})$</td>
-            <td>$O(\text{Tokens})$</td>
+            <td>O(1) <span class="badge-pill badge-green">Skipped</span></td>
+            <td>O(C<sub>unresolved</sub> &times; &tau;<sub>LLM</sub>)</td>
+            <td>O(C &times; &tau;<sub>LLM</sub>)</td>
+            <td>O(Tokens)</td>
           </tr>
           <tr>
-            <td><strong>Hungarian Assignment</strong></td>
-            <td>$O(C)$</td>
-            <td>$O(T \cdot k \log k)$</td>
-            <td>$O(C \log C)$</td>
-            <td>$O(C)$</td>
+            <td><strong>Confidence-Ordered Assignment</strong></td>
+            <td>O(C)</td>
+            <td>O(C log C)</td>
+            <td>O(C<sup>2</sup>) re-scorings</td>
+            <td>O(C)</td>
           </tr>
           <tr>
             <td><strong>Deterministic Quality Rules</strong></td>
-            <td>$O(R \times 17)$</td>
-            <td>$O(R \times 17)$</td>
-            <td>$O(R \times 17)$</td>
-            <td>$O(N_{\text{issues}})$</td>
+            <td>O(R &times; 17)</td>
+            <td>O(R &times; 17)</td>
+            <td>O(R &times; 17)</td>
+            <td>O(N<sub>issues</sub>)</td>
           </tr>
           <tr>
             <td><strong>Whitelisted Transformation</strong></td>
-            <td>$O(R \times A)$</td>
-            <td>$O(R \times A)$</td>
-            <td>$O(R \times A)$</td>
-            <td>$O(R \times C)$</td>
+            <td>O(R &times; A)</td>
+            <td>O(R &times; A)</td>
+            <td>O(R &times; A)</td>
+            <td>O(R &times; C)</td>
           </tr>
           <tr>
             <td><strong>Pandera Schema Validation</strong></td>
-            <td>$O(R \times 17)$</td>
-            <td>$O(R \times 17)$</td>
-            <td>$O(R \times 17)$</td>
-            <td>$O(1)$</td>
+            <td>O(R &times; 17)</td>
+            <td>O(R &times; 17)</td>
+            <td>O(R &times; 17)</td>
+            <td>O(1)</td>
           </tr>
           <tr>
             <td><strong>Excel File Serialization</strong></td>
-            <td>$O(R \times 17)$</td>
-            <td>$O(R \times 17)$</td>
-            <td>$O(R \times 17)$</td>
-            <td>$O(R \times 17)$</td>
+            <td>O(R &times; 17)</td>
+            <td>O(R &times; 17)</td>
+            <td>O(R &times; 17)</td>
+            <td>O(R &times; 17)</td>
           </tr>
         </tbody>
       </table>

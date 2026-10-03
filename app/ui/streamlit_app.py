@@ -338,6 +338,8 @@ def init_session():
         st.session_state.transformed = False
     if "nav_tab" not in st.session_state:
         st.session_state.nav_tab = "Review"
+    if "graph_thread_id" not in st.session_state:
+        st.session_state.graph_thread_id = None
 
 
 # ---------------------------------------------------------------------------
@@ -377,7 +379,7 @@ def describe_recommendation(rec: Recommendation) -> Dict[str, str]:
         reason = f"Detected {rec.affected_rows} non-standard sprinkler value(s) in '{src}'."
         impact = "Replaces informal entries (e.g. 'Yes', 'No') with standardized codes."
 
-    elif op == "normalize_state":
+    elif op in ("state_to_abbrev", "normalize_state"):
         title = f"Standardize US state code in '{tgt}'"
         summary = "Converts full state names or lowercase entries into standard 2-letter postal abbreviations."
         reason = f"Detected non-abbreviated state name in {rec.affected_rows} row(s)."
@@ -399,7 +401,7 @@ def describe_recommendation(rec: Recommendation) -> Dict[str, str]:
         title = f"Format '{tgt}' as integer"
         summary = "Ensures values in this column are clean whole numbers."
         reason = f"Detected float or string representations in {rec.affected_rows} row(s)."
-        impact = "Stores values as clean integers without decimals."
+        impact = "Stores whole-number values as integers. Fractional values (e.g. 1.5) are left unchanged for review, never truncated."
 
     elif op == "flag_for_review":
         title = f"Review data quality flag on '{tgt}'"
@@ -543,25 +545,23 @@ def _run_pipeline(uploaded_file):
     )
 
     try:
-        from app.agents.sheet_discovery import run_sheet_discovery
-        from app.agents.schema_mapping import run_schema_mapping
-        from app.agents.quality_reasoning import run_quality_reasoning
+        # Agents 1–3 run through the LangGraph StateGraph, which pauses
+        # (checkpointed) before the human_review node. A fresh thread per run
+        # keeps a re-run from resuming an older pipeline.
+        from app.orchestration.graph import run_pipeline_to_review
 
-        state = run_sheet_discovery(state)
+        thread_id = f"{session_id}-{uuid.uuid4().hex[:8]}"
+        state = run_pipeline_to_review(state, thread_id=thread_id)
         if state.stage == WorkflowStage.ERROR:
-            st.error(f"Sheet discovery error: {state.error_message}")
+            if state.sheet_manifest is None:
+                st.error(f"Sheet discovery error: {state.error_message}")
+            elif state.mappings is None:
+                st.error(f"Schema mapping error: {state.error_message}")
+            else:
+                st.error(f"Quality assessment error: {state.error_message}")
             return
 
-        state = run_schema_mapping(state)
-        if state.stage == WorkflowStage.ERROR:
-            st.error(f"Schema mapping error: {state.error_message}")
-            return
-
-        state = run_quality_reasoning(state)
-        if state.stage == WorkflowStage.ERROR:
-            st.error(f"Quality assessment error: {state.error_message}")
-            return
-
+        st.session_state.graph_thread_id = thread_id
         state.stage = WorkflowStage.HUMAN_REVIEW
 
     except Exception as e:
@@ -630,14 +630,23 @@ def render_review_section(state: SOVState):
                 st.session_state.sov_state = state
                 st.rerun()
         else:
-            if pending:
+            # Bulk approval never covers review-required items: low-confidence
+            # recommendations must be decided one by one.
+            optional_pending = [r for r in pending if not r.review_required]
+            if optional_pending:
                 btn_rem_box = st.empty()
-                if btn_rem_box.button(f"Approve All Remaining ({len(pending)} items)", key="approve_remaining_btn"):
+                if btn_rem_box.button(f"Approve All Remaining ({len(optional_pending)} items)", key="approve_remaining_btn"):
                     btn_rem_box.button("Approving Remaining...", disabled=True, key="appr_rem_busy")
-                    for r in pending:
+                    for r in optional_pending:
                         _approve_recommendation(state, r.id)
                     st.session_state.sov_state = state
                     st.rerun()
+            elif pending:
+                st.button(
+                    f"Review Remaining Individually ({len(pending)} items)",
+                    disabled=True,
+                    key="approve_remaining_locked",
+                )
             else:
                 st.button(f"All High-Confidence Approved ({len(approved)} Approved)", disabled=True, key="approve_high_locked")
 
@@ -708,6 +717,10 @@ def render_review_section(state: SOVState):
 
 def _render_recommendation_card(state: SOVState, rec: Recommendation):
     details = describe_recommendation(rec)
+    if rec.status == RecommendationStatus.ESCALATED:
+        details["impact"] = "Not applied. Escalated to a human reviewer: the column stays unmapped unless a target is assigned."
+    elif rec.status == RecommendationStatus.REJECTED:
+        details["impact"] = "Not applied: rejected by the reviewer."
 
     # Badges
     status_cls = {
@@ -801,6 +814,15 @@ def _render_recommendation_card(state: SOVState, rec: Recommendation):
                 st.rerun()
         with col_rej:
             st.markdown(f"<span style='font-size:12px;color:#B91C1C;'>Rejected{': ' + rec.rejection_note if rec.rejection_note else ''}</span>", unsafe_allow_html=True)
+
+    elif rec.status == RecommendationStatus.ESCALATED:
+        with col_appr:
+            st.markdown("<span style='font-size:12px;color:#6D28D9;font-weight:500;'>Escalated to human</span>", unsafe_allow_html=True)
+        if rec.action_type == ActionType.COLUMN_MAPPING:
+            with col_edit:
+                if st.button("Assign Target", key=f"edit_{rec.id}"):
+                    st.session_state[f"show_edit_{rec.id}"] = not st.session_state.get(f"show_edit_{rec.id}", False)
+                    st.rerun()
 
     # Expandable rejection note
     if st.session_state.get(f"show_reject_{rec.id}"):
@@ -913,8 +935,16 @@ def _edit_and_approve_recommendation(state: SOVState, rec_id: str, new_target: s
 def _run_rereason(state: SOVState):
     from app.agents.quality_reasoning import run_quality_reasoning
     try:
+        handled = {
+            r.id for r in state.recommendations
+            if r.status == RecommendationStatus.REJECTED and r.rejection_note and not r.feedback_processed
+        }
         new_state = run_quality_reasoning(state)
-        state.recommendations = new_state.recommendations
+        # Feedback consumed here, so the graph does not re-reason on it again
+        state.recommendations = [
+            r.model_copy(update={"feedback_processed": True}) if r.id in handled else r
+            for r in new_state.recommendations
+        ]
         state.quality_report = new_state.quality_report
         state.stage = WorkflowStage.HUMAN_REVIEW
         st.session_state.sov_state = state
@@ -924,9 +954,24 @@ def _run_rereason(state: SOVState):
 
 def _run_transformation(state: SOVState):
     from app.agents.transformation import run_transformation
+    from app.orchestration.graph import resume_pipeline_after_review
     with st.spinner("Executing transformations…"):
         try:
-            final_state = run_transformation(state)
+            final_state = None
+            thread_id = st.session_state.get("graph_thread_id")
+            if thread_id:
+                # Resume the paused graph: human_review → transform_export
+                try:
+                    final_state = resume_pipeline_after_review(state, thread_id=thread_id)
+                    if final_state.stage not in (WorkflowStage.COMPLETE, WorkflowStage.VALIDATING, WorkflowStage.ERROR):
+                        logger.warning("Graph stopped at '%s' — running Agent 4 directly.", final_state.stage)
+                        final_state = None
+                except Exception as e:
+                    logger.warning("Graph resume failed (%s) — running Agent 4 directly.", e)
+                    final_state = None
+            if final_state is None:
+                # No resumable checkpoint (e.g. app restarted): same Agent 4 node, called directly
+                final_state = run_transformation(state)
             st.session_state.sov_state = final_state
             st.session_state.transformed = True
         except Exception as e:
@@ -989,6 +1034,22 @@ def render_mapping_section(state: SOVState):
     df = pd.DataFrame(rows)
     st.dataframe(df, width="stretch", hide_index=True)
 
+    # Machine-readable mapping output (source → target, confidence, method, evidence)
+    mapping_json = result.model_dump(mode="json")
+    with st.expander("Mapping JSON output", expanded=False):
+        semantic = [m.source_column for m in result.mappings if m.method == "semantic"]
+        if semantic:
+            st.caption("Semantic (embedding) matches: " + ", ".join(semantic))
+        st.json(mapping_json, expanded=3)
+    import json as _json
+    st.download_button(
+        label="Download mapping JSON",
+        data=_json.dumps(mapping_json, indent=2),
+        file_name="Schema_Mapping.json",
+        mime="application/json",
+        key="dl_mapping_json",
+    )
+
 
 # ---------------------------------------------------------------------------
 # Section 4: Sheet Discovery
@@ -1016,6 +1077,12 @@ def render_discovery_section(state: SOVState):
             </div>
             """,
             unsafe_allow_html=True,
+        )
+
+    if len(state.data_sheets) > 1:
+        st.caption(
+            f"{len(state.data_sheets)} data sheets merged into one output: "
+            + ", ".join(state.data_sheets)
         )
 
     rows = []
@@ -1078,6 +1145,29 @@ def render_quality_section(state: SOVState):
 
     st.markdown("<div style='height: 14px;'></div>", unsafe_allow_html=True)
 
+    # Per-field completeness (share of rows with a value, per target field)
+    if qr.completeness_by_field:
+        mapped_targets = {m.target for m in (state.mappings.mappings if state.mappings else []) if m.target}
+        with st.expander(f"Per-field completeness ({qr.total_rows} rows)", expanded=True):
+            comp_rows = [
+                {
+                    "Target Field": field,
+                    "Completeness": pct / 100.0,
+                    "Status": "Mapped" if field in mapped_targets else "No source column",
+                }
+                for field, pct in qr.completeness_by_field.items()
+            ]
+            st.dataframe(
+                pd.DataFrame(comp_rows),
+                width="stretch",
+                hide_index=True,
+                column_config={
+                    "Completeness": st.column_config.ProgressColumn(
+                        "Completeness", format="percent", min_value=0.0, max_value=1.0,
+                    ),
+                },
+            )
+
     if qr.issues:
         issue_rows = []
         for issue in qr.issues:
@@ -1099,6 +1189,16 @@ def render_quality_section(state: SOVState):
 # Section 6: Data Preview (Before & After)
 # ---------------------------------------------------------------------------
 
+def _display_safe(df: pd.DataFrame) -> pd.DataFrame:
+    """Display-only copy: mixed-type raw columns (1980 and "1980's") as text, so Arrow can render them."""
+    out = df.copy()
+    for col in out.columns:
+        values = out[col].dropna()
+        if out[col].dtype == object and values.map(type).nunique() > 1:
+            out[col] = out[col].map(lambda v: v if pd.isna(v) else str(v))
+    return out
+
+
 def render_preview_section(state: SOVState):
     from app.agents.transformation import _load_source_df, generate_preview_df
 
@@ -1111,14 +1211,14 @@ def render_preview_section(state: SOVState):
     with col_before:
         st.markdown("<strong style='font-size:13px;color:#111827;'>Raw Source Data</strong>", unsafe_allow_html=True)
         if source_df is not None and not source_df.empty:
-            st.dataframe(source_df.head(15), width="stretch")
+            st.dataframe(_display_safe(source_df.head(15)), width="stretch")
         else:
             st.caption("Source data not loaded.")
 
     with col_after:
         st.markdown("<strong style='font-size:13px;color:#111827;'>Transformed Output (17 Standard Fields)</strong>", unsafe_allow_html=True)
         if not preview_df.empty:
-            st.dataframe(preview_df.head(15), width="stretch")
+            st.dataframe(_display_safe(preview_df.head(15)), width="stretch")
         else:
             st.caption("Approve recommendations in Human Review to generate preview.")
 
@@ -1206,10 +1306,13 @@ def render_export_section(state: SOVState):
                 key="dl_audit_btn",
             )
 
+    if state.output_path and Path(state.output_path).exists():
+        _render_schema_conformance(state.output_path)
+
     # Audit Trail summary
     if state.audit_log:
         st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
-        with st.expander(f"Audit Trail ({len(state.audit_log)} logged entries)", expanded=False):
+        with st.expander(f"Audit Trail ({len(state.audit_log)} logged entries)", expanded=True):
             audit_rows = []
             for entry in state.audit_log:
                 audit_rows.append({
@@ -1224,6 +1327,73 @@ def render_export_section(state: SOVState):
                     "Timestamp": entry.timestamp,
                 })
             st.dataframe(pd.DataFrame(audit_rows), width="stretch", hide_index=True)
+
+
+def _render_schema_conformance(output_path: str):
+    """Show the written Cleaned_SOV.xlsx: headers, field types, merged cells, first rows."""
+    import openpyxl
+    from app.processing.validation import TARGET_COLUMN_ORDER
+    from app.schemas.target_schema import TARGET_DTYPES
+
+    ws = openpyxl.load_workbook(output_path, read_only=False)["Cleaned_SOV"]
+    headers = [c.value for c in ws[1]]
+    merged = len(ws.merged_cells.ranges)
+    cleaned = pd.read_excel(output_path, sheet_name="Cleaned_SOV")
+
+    def conforms(col: str) -> str:
+        expected = TARGET_DTYPES[col]
+        values = cleaned[col].dropna()
+        if values.empty:
+            return "Empty"
+        if expected == "str":
+            return "OK"
+        nums = pd.to_numeric(values, errors="coerce")
+        if nums.isna().any():
+            return f"{int(nums.isna().sum())} non-numeric"
+        if expected == "int" and not (nums == nums.round()).all():
+            return f"{int((nums != nums.round()).sum())} non-integer"
+        return "OK"
+
+    st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        ok = headers == TARGET_COLUMN_ORDER
+        st.markdown(
+            f"<div class='stat-pill'><div class='stat-pill-val'>{len(headers)} {'✓' if ok else '✗'}</div>"
+            f"<div class='stat-pill-lbl'>Columns, exact names & order</div></div>",
+            unsafe_allow_html=True,
+        )
+    with c2:
+        st.markdown(
+            f"<div class='stat-pill'><div class='stat-pill-val'>{merged} {'✓' if merged == 0 else '✗'}</div>"
+            f"<div class='stat-pill-lbl'>Merged cell ranges</div></div>",
+            unsafe_allow_html=True,
+        )
+    with c3:
+        st.markdown(
+            f"<div class='stat-pill'><div class='stat-pill-val'>{len(cleaned)}</div>"
+            f"<div class='stat-pill-lbl'>Data rows</div></div>",
+            unsafe_allow_html=True,
+        )
+
+    with st.expander("Schema conformance (headers & data types)", expanded=True):
+        st.dataframe(
+            pd.DataFrame([
+                {
+                    "#": i,
+                    "Header in file": h,
+                    "Expected": TARGET_COLUMN_ORDER[i - 1] if i <= len(TARGET_COLUMN_ORDER) else "",
+                    "Expected type": TARGET_DTYPES.get(h, ""),
+                    "Values": conforms(h) if h in TARGET_DTYPES else "",
+                }
+                for i, h in enumerate(headers, 1)
+            ]),
+            width="stretch",
+            hide_index=True,
+        )
+
+    with st.expander("Cleaned output (first 20 rows)", expanded=True):
+        st.dataframe(cleaned.head(20), width="stretch", hide_index=True)
 
 
 # ---------------------------------------------------------------------------

@@ -96,8 +96,13 @@ def profile_column(series: pd.Series | pd.DataFrame) -> Dict:
             zip_count += 1
     profile["zip_ratio"] = zip_count / n
 
+    # 3–4 digit integers: ZIPs whose leading zeros Excel dropped (00802 → 802)
+    short_zip_count = sum(1 for v in clean if re.match(r"^\d{3,4}$", re.sub(r"\.0$", "", v.strip())))
+    profile["short_zip_ratio"] = short_zip_count / n
+
     # State-like detection (2-letter US state)
-    state_count = sum(1 for v in clean if v.strip().upper() in US_STATE_ABBREVS)
+    # Tolerate dotted/spaced forms such as "V.I." or "N. Y."
+    state_count = sum(1 for v in clean if re.sub(r"[\s.]", "", v).upper() in US_STATE_ABBREVS)
     profile["state_ratio"] = state_count / n
 
     # Sprinkler-like detection
@@ -149,6 +154,9 @@ def score_value_profile_fit(profile: Dict, target_field: str) -> float:
         score += profile.get("numeric_ratio", 0.0) * 0.4
         if profile.get("any_negative"):
             score *= 0.5
+        # A column of 4-digit years (1990, 2005, …) is not an amount
+        if profile.get("year_ratio", 0.0) >= 0.9:
+            score *= 0.2
 
     elif target_field == "Year Built":
         score = profile.get("year_ratio", 0.0)
@@ -158,7 +166,8 @@ def score_value_profile_fit(profile: Dict, target_field: str) -> float:
                 score = min(1.0, score + 0.3)
 
     elif target_field == "Zip":
-        zip_ratio = profile.get("zip_ratio", 0.0)
+        # Short (zero-stripped) ZIPs are weaker evidence than 5-digit ones
+        zip_ratio = max(profile.get("zip_ratio", 0.0), 0.6 * profile.get("short_zip_ratio", 0.0))
         # High zip_ratio trumps monetary detection (ZIPs are 5-digit numbers)
         if zip_ratio > 0.5:
             score = zip_ratio
@@ -189,15 +198,27 @@ def score_value_profile_fit(profile: Dict, target_field: str) -> float:
         score = min(1.0, score)
 
     elif target_field == "Reference":
-        # High unique ratio, mixed types
-        score = profile.get("unique_ratio", 0.0) * 0.7
-        score += 0.3 * (1 - profile.get("monetary_ratio", 0.0))
+        # Any value type can be an identifier (numeric Loc # values are common,
+        # and repeats are legitimate when one location has several buildings),
+        # so uniqueness only raises the score above a neutral floor.
+        # Fractional numbers (coordinates, amounts) are not identifiers.
+        if profile.get("numeric_ratio", 0.0) > 0.8 and not profile.get("all_integers", False):
+            return 0.2
+        score = 0.5 + 0.5 * profile.get("unique_ratio", 0.0)
 
     elif target_field == "Address":
         score = profile.get("address_ratio", 0.0)
+        # Some SOVs carry only a locality in the address column; plain text is
+        # weak evidence but not a contradiction.
+        if profile.get("numeric_ratio", 0.0) < 0.2:
+            score = max(score, 0.3)
 
     elif target_field in {"City", "County", "Country", "Occupancy", "Construction"}:
-        # Text-dominant, not numeric
+        # Text-dominant, not numeric. A purely numeric column (lat/long,
+        # amounts, IDs) cannot be a place name. Occupancy/Construction may
+        # legitimately be numeric codes, so they are not vetoed.
+        if target_field in {"City", "County", "Country"} and profile.get("numeric_ratio", 0.0) > 0.8:
+            return 0.0
         score = (1 - profile.get("numeric_ratio", 0.0)) * 0.7
         score += (1 - profile.get("monetary_ratio", 0.0)) * 0.3
 

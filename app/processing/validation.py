@@ -79,6 +79,11 @@ def validate_output_schema(df: pd.DataFrame) -> Tuple[bool, List[str]]:
     except Exception as e:
         errors.append(f"Pandera validation error: {e}")
 
+    # 3b. Type conformance for numeric fields. Column presence alone says
+    # nothing about content; a "Year Built" of "1980's" or a "Building Value"
+    # of "Included in Bldg" is not schema-conformant output.
+    errors.extend(_type_conformance_errors(df))
+
     # 4. No merged cells (checked structurally — always True for DataFrame)
     # DataFrame output to xlsx never has merged cells unless explicitly added.
 
@@ -88,6 +93,37 @@ def validate_output_schema(df: pd.DataFrame) -> Tuple[bool, List[str]]:
 
     passed = len(errors) == 0
     return passed, errors
+
+
+def _as_number(v):
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    try:
+        return float(str(v).strip())
+    except ValueError:
+        return None
+
+
+def _type_conformance_errors(df: pd.DataFrame) -> List[str]:
+    from app.schemas.target_schema import INTEGER_FIELDS, MONETARY_FIELDS
+
+    errors = []
+    for col in TARGET_COLUMN_ORDER:
+        if col not in MONETARY_FIELDS and col not in INTEGER_FIELDS:
+            continue
+        bad = []
+        for v in df[col]:
+            if pd.isna(v):
+                continue
+            num = _as_number(v)
+            if num is None or (col in INTEGER_FIELDS and not num.is_integer()):
+                bad.append(v)
+        if bad:
+            kind = "integer" if col in INTEGER_FIELDS else "numeric"
+            errors.append(f"{col}: {len(bad)} non-{kind} value(s), e.g. {bad[0]!r}")
+    return errors
 
 
 def enforce_column_order(df: pd.DataFrame) -> pd.DataFrame:
