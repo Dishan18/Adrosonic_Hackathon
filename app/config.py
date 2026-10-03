@@ -21,6 +21,10 @@ class Config:
     GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
     GROQ_MODEL: str = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 
+    # Gemini settings (fallback or primary)
+    GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
+    GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+
     # Ollama settings
     OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
     OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "llama3.2")
@@ -71,10 +75,12 @@ class Config:
     @classmethod
     def is_llm_available(cls) -> bool:
         if cls.LLM_PROVIDER == "groq":
-            return bool(cls.GROQ_API_KEY)
+            return bool(cls.GROQ_API_KEY or cls.GEMINI_API_KEY)
+        if cls.LLM_PROVIDER == "gemini":
+            return bool(cls.GEMINI_API_KEY)
         if cls.LLM_PROVIDER == "ollama":
             return True  # Assume reachable; will fail gracefully at call time
-        return False
+        return bool(cls.GROQ_API_KEY or cls.GEMINI_API_KEY)
 
 
 config = Config()

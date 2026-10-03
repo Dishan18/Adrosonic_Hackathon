@@ -65,6 +65,10 @@ Statement of Values (SOV) files in commercial property insurance are notoriously
 3. **HITL Review Thresholds**:
    - Mappings and recommendations below 90% confidence trigger mandatory human review (`review_required=True`).
    - Export locked until all recommendations are reviewed and approved.
+4. **Multi-Provider LLM Gateway & Fallback**:
+   - Primary: Groq (`llama-3.3-70b-versatile` with automatic fallback to available chat models like `qwen/qwen3.8-27b`).
+   - Secondary Fallback: Google Gemini API (v1beta REST integration via `httpx` with `systemInstructions` and schema enforcement).
+   - Tertiary Fallback: Ollama / deterministic rules.
 
 ---
 

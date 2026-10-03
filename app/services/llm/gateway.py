@@ -25,49 +25,100 @@ class LLMGateway:
     def __init__(self):
         from app.config import config
         self.config = config
-        self._client = None
+        self._groq_client = None
         self._provider = config.LLM_PROVIDER
 
-    def _get_client(self):
-        if self._client is not None:
-            return self._client
-
-        if self._provider == "groq":
-            try:
-                from groq import Groq
-                self._client = Groq(api_key=self.config.GROQ_API_KEY)
-                logger.info("LLM Gateway: using Groq (%s)", self.config.GROQ_MODEL)
-            except Exception as e:
-                logger.warning("Groq init failed: %s — falling back to Ollama", e)
-                self._provider = "ollama"
-                return self._get_ollama_client()
-        elif self._provider == "ollama":
-            return self._get_ollama_client()
-        else:
-            raise ValueError(f"Unknown LLM provider: {self._provider}")
-
-        return self._client
-
-    def _get_ollama_client(self):
+    def _get_groq_client(self):
+        if self._groq_client is not None:
+            return self._groq_client
         try:
-            import httpx
-            # Store a simple marker; actual calls use httpx
-            self._client = {"type": "ollama", "base_url": self.config.OLLAMA_BASE_URL}
-            logger.info("LLM Gateway: using Ollama at %s", self.config.OLLAMA_BASE_URL)
-            return self._client
+            from groq import Groq
+            if self.config.GROQ_API_KEY:
+                self._groq_client = Groq(api_key=self.config.GROQ_API_KEY)
+                logger.info("LLM Gateway: initialized Groq client (%s)", self.config.GROQ_MODEL)
+                return self._groq_client
         except Exception as e:
-            logger.error("Ollama init failed: %s", e)
-            return None
+            logger.warning("Groq client init error: %s", e)
+        return None
 
     def _call_groq(self, messages: list, model: str, temperature: float = 0.1) -> str:
-        client = self._get_client()
-        response = client.chat.completions.create(
-            model=model,
-            messages=messages,
-            temperature=temperature,
-            max_tokens=4096,
-        )
-        return response.choices[0].message.content or ""
+        client = self._get_groq_client()
+        if client is None:
+            raise RuntimeError("Groq client not available or GROQ_API_KEY not configured")
+
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=4096,
+            )
+            return response.choices[0].message.content or ""
+        except Exception as e:
+            err_str = str(e).lower()
+            if "model_not_found" in err_str or "does not exist" in err_str:
+                for alt_model in ["qwen/qwen3.8-27b", "openai/gpt-oss-120b", "allam-2-7b"]:
+                    if alt_model != model:
+                        try:
+                            logger.info("Groq model '%s' unavailable, falling back to '%s'", model, alt_model)
+                            response = client.chat.completions.create(
+                                model=alt_model,
+                                messages=messages,
+                                temperature=temperature,
+                                max_tokens=4096,
+                            )
+                            return response.choices[0].message.content or ""
+                        except Exception:
+                            continue
+            raise
+
+    def _call_gemini(self, messages: list, temperature: float = 0.1) -> str:
+        import httpx
+
+        api_key = self.config.GEMINI_API_KEY
+        if not api_key:
+            raise ValueError("GEMINI_API_KEY is not configured")
+
+        model = self.config.GEMINI_MODEL or "gemini-2.5-flash"
+        model_name = model.split("models/")[-1]
+
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
+
+        contents = []
+        system_instructions = []
+        for msg in messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            if role == "system":
+                system_instructions.append(content)
+            elif role == "assistant":
+                contents.append({"role": "model", "parts": [{"text": content}]})
+            else:
+                contents.append({"role": "user", "parts": [{"text": content}]})
+
+        if system_instructions:
+            sys_text = "\n\n".join(system_instructions)
+            if contents and contents[0]["role"] == "user":
+                contents[0]["parts"][0]["text"] = f"[System Instructions]\n{sys_text}\n\n{contents[0]['parts'][0]['text']}"
+            else:
+                contents.insert(0, {"role": "user", "parts": [{"text": f"[System Instructions]\n{sys_text}"}]})
+
+        payload = {
+            "contents": contents,
+            "generationConfig": {
+                "temperature": temperature,
+                "maxOutputTokens": 4096,
+            },
+        }
+
+        resp = httpx.post(url, json=payload, timeout=60)
+        resp.raise_for_status()
+        data = resp.json()
+        candidates = data.get("candidates", [])
+        if not candidates:
+            return ""
+        parts = candidates[0].get("content", {}).get("parts", [])
+        return "".join(p.get("text", "") for p in parts)
 
     def _call_ollama(self, messages: list, temperature: float = 0.1) -> str:
         import httpx
@@ -89,24 +140,36 @@ class LLMGateway:
         retries: int = 2,
     ) -> Optional[str]:
         """
-        Send a chat completion request.
-        Returns None if the LLM is unavailable after retries.
+        Send a chat completion request with automatic multi-provider fallback:
+        Primary (Groq) -> Fallback (Gemini) -> Fallback (Ollama).
         """
-        for attempt in range(retries + 1):
-            try:
-                client = self._get_client()
-                if client is None:
-                    return None
-                if self._provider == "groq":
+        # 1. Attempt Groq if configured
+        if self.config.GROQ_API_KEY:
+            for attempt in range(retries + 1):
+                try:
                     return self._call_groq(messages, self.config.GROQ_MODEL, temperature)
-                elif self._provider == "ollama":
-                    return self._call_ollama(messages, temperature)
-            except Exception as e:
-                logger.warning("LLM attempt %d failed: %s", attempt + 1, e)
-                if attempt < retries:
-                    time.sleep(2 ** attempt)
+                except Exception as e:
+                    logger.warning("Groq attempt %d failed: %s", attempt + 1, e)
+                    if attempt < retries:
+                        time.sleep(1)
 
-        logger.error("LLM unavailable after %d attempts", retries + 1)
+        # 2. Fallback to Gemini if configured
+        if self.config.GEMINI_API_KEY:
+            logger.info("Attempting Gemini fallback...")
+            try:
+                return self._call_gemini(messages, temperature)
+            except Exception as e:
+                logger.warning("Gemini fallback failed: %s", e)
+
+        # 3. Fallback to Ollama if configured
+        if self.config.LLM_PROVIDER == "ollama" or (hasattr(self.config, "OLLAMA_BASE_URL") and self.config.OLLAMA_BASE_URL):
+            logger.info("Attempting Ollama fallback...")
+            try:
+                return self._call_ollama(messages, temperature)
+            except Exception as e:
+                logger.warning("Ollama fallback failed: %s", e)
+
+        logger.error("All configured LLM providers failed or unavailable.")
         return None
 
     def complete_structured(
