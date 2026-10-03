@@ -98,6 +98,11 @@ def _apply_approved_transformations(
                 ))
 
     if rename_map:
+        # If any target column name already exists in df and isn't being renamed itself,
+        # rename it first to avoid column collisions
+        for src, tgt in rename_map.items():
+            if tgt in df.columns and tgt not in rename_map:
+                df = df.rename(columns={tgt: f"_orig_{tgt}"})
         df = df.rename(columns=rename_map)
         logger.info("Renamed columns: %s", rename_map)
 
@@ -114,6 +119,21 @@ def _apply_approved_transformations(
                 logger.warning("Target column '%s' not in DataFrame — skipping.", target_col)
                 continue
 
+            # Ensure single series if duplicate column exists with target_col name
+            target_data = df[target_col]
+            if isinstance(target_data, pd.DataFrame):
+                best_idx = 0
+                best_cnt = -1
+                for i in range(target_data.shape[1]):
+                    cnt = target_data.iloc[:, i].notna().sum()
+                    if cnt > best_cnt:
+                        best_cnt = cnt
+                        best_idx = i
+                other_cols = [c for c in df.columns if c != target_col]
+                chosen_series = target_data.iloc[:, best_idx]
+                df = df.loc[:, other_cols].copy()
+                df[target_col] = chosen_series
+
             if operation not in WHITELISTED_OPERATIONS:
                 logger.error(
                     "Operation '%s' not in whitelist — REFUSING to apply. Rec: %s",
@@ -128,16 +148,17 @@ def _apply_approved_transformations(
             try:
                 # Snapshot before
                 before_series = df[target_col].copy()
+                if isinstance(before_series, pd.DataFrame):
+                    before_series = before_series.iloc[:, 0]
 
                 # Apply transformation
-                df[target_col] = apply_transformation_to_series(operation, df[target_col])
+                df[target_col] = apply_transformation_to_series(operation, before_series)
 
                 # Create audit entries for changed rows
-                changed_mask = df[target_col] != before_series
-                changed_indices = list(changed_mask[changed_mask].index[:100])
+                changed_mask = (df[target_col] != before_series) & ~(df[target_col].isna() & before_series.isna())
+                n_changed = int(changed_mask.sum()) if hasattr(changed_mask, "sum") else 0
 
                 # Summarize in one audit entry per recommendation
-                n_changed = changed_mask.sum()
                 before_sample = str(before_series.iloc[0]) if len(before_series) > 0 else ""
                 after_sample = str(df[target_col].iloc[0]) if len(df) > 0 else ""
 

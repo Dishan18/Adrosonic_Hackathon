@@ -213,10 +213,33 @@ def extract_data_frame(
     if header_row >= len(df):
         return df
 
-    # Use header row as column names
+    # Use header row as column names, cleaning and deduplicating
     headers = df.iloc[header_row]
     data = df.iloc[header_row + 1:].copy()
-    data.columns = [str(h) if pd.notna(h) else f"_col_{i}" for i, h in enumerate(headers)]
+
+    cleaned_headers = []
+    for i, h in enumerate(headers):
+        if pd.isna(h):
+            cleaned_headers.append(f"_col_{i}")
+        else:
+            val = re.sub(r"[\r\n\t]+", " ", str(h)).strip()
+            if not val or val.lower() == "nan" or val.lower().startswith("unnamed:"):
+                cleaned_headers.append(f"_col_{i}")
+            else:
+                cleaned_headers.append(val)
+
+    # Ensure strictly unique column names
+    seen: Dict[str, int] = {}
+    unique_cols = []
+    for col in cleaned_headers:
+        if col in seen:
+            seen[col] += 1
+            unique_cols.append(f"{col} ({seen[col]})")
+        else:
+            seen[col] = 0
+            unique_cols.append(col)
+
+    data.columns = unique_cols
     data = data.reset_index(drop=True)
 
     # Drop completely blank rows

@@ -29,11 +29,13 @@ CURRENT_YEAR = datetime.now().year
 # Profile a single column
 # ---------------------------------------------------------------------------
 
-def profile_column(series: pd.Series) -> Dict:
+def profile_column(series: pd.Series | pd.DataFrame) -> Dict:
     """
     Compute value-profile metrics for a single pandas Series.
     Returns a dict of profile attributes used for value_profile_fit scoring.
     """
+    if isinstance(series, pd.DataFrame):
+        series = series.iloc[:, 0]
     clean = series.dropna().astype(str).str.strip()
     clean = clean[clean != ""]
 

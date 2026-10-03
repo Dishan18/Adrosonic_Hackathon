@@ -94,16 +94,25 @@ def enforce_column_order(df: pd.DataFrame) -> pd.DataFrame:
     """
     Ensure DataFrame has exactly 17 columns in the exact target order.
     Missing columns are added as null. Extra columns are dropped.
+    Handles duplicate columns safely by picking the series with the most non-null values.
     """
-    # Add missing columns as null
+    ordered_df = pd.DataFrame(index=df.index)
+
     for col in TARGET_COLUMN_ORDER:
-        if col not in df.columns:
-            df[col] = pd.NA
+        if col in df.columns:
+            val = df[col]
+            if isinstance(val, pd.DataFrame):
+                # If duplicate columns exist with this target name, pick the one with most non-nulls
+                best_s = val.iloc[:, 0]
+                for i in range(1, val.shape[1]):
+                    candidate = val.iloc[:, i]
+                    if candidate.notna().sum() > best_s.notna().sum():
+                        best_s = candidate
+                ordered_df[col] = best_s
+            else:
+                ordered_df[col] = val
+        else:
+            ordered_df[col] = pd.NA
 
-    # Drop extra columns
-    df = df[[c for c in TARGET_COLUMN_ORDER if c in df.columns]]
+    return ordered_df[TARGET_COLUMN_ORDER]
 
-    # Ensure exact order
-    df = df[TARGET_COLUMN_ORDER]
-
-    return df

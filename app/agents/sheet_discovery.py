@@ -136,13 +136,16 @@ def _compute_type_consistency(df: pd.DataFrame, header_row: int) -> float:
     if header_row + 1 >= len(df):
         return 0.0
 
-    data = df.iloc[header_row + 1:]
+    data = df.iloc[header_row + 1:].head(200)
     if len(data) == 0:
         return 0.0
 
     consistent_cols = 0
     for col in data.columns:
-        col_data = data[col].dropna().astype(str).str.strip()
+        col_series = data[col]
+        if isinstance(col_series, pd.DataFrame):
+            col_series = col_series.iloc[:, 0]
+        col_data = col_series.dropna().astype(str).str.strip()
         if len(col_data) == 0:
             continue
         numeric_count = sum(1 for v in col_data if _looks_numeric(v))
@@ -160,7 +163,7 @@ def _compute_data_continuity(df: pd.DataFrame, header_row: int) -> float:
     """
     if header_row + 1 >= len(df):
         return 0.0
-    data = df.iloc[header_row + 1:]
+    data = df.iloc[header_row + 1:].head(200)
     non_blank = data.dropna(how="all")
     return len(non_blank) / max(len(data), 1)
 

@@ -65,13 +65,28 @@ def _get_mapped_df(state: SOVState) -> Optional[pd.DataFrame]:
 
     data_df = extract_data_frame(df, header_row)
 
-    # Rename according to mappings
-    rename_map = {
-        m.source_column: m.target
-        for m in state.mappings.mappings
-        if m.target is not None and m.source_column in data_df.columns
-    }
+    # Rename according to mappings, avoiding duplicate targets
+    rename_map = {}
+    claimed_targets = set()
+    for m in state.mappings.mappings:
+        if m.target is not None and m.source_column in data_df.columns:
+            if m.target not in claimed_targets:
+                rename_map[m.source_column] = m.target
+                claimed_targets.add(m.target)
+
     data_df = data_df.rename(columns=rename_map)
+
+    # Guarantee every column name is strictly unique
+    seen: Dict[str, int] = {}
+    deduped = []
+    for col in data_df.columns:
+        if col in seen:
+            seen[col] += 1
+            deduped.append(f"{col}_{seen[col]}")
+        else:
+            seen[col] = 0
+            deduped.append(col)
+    data_df.columns = deduped
     return data_df
 
 
@@ -90,16 +105,24 @@ def detect_quality_issues(
         issue_counter[0] += 1
         return f"QI-{issue_counter[0]:04d}"
 
+    def get_series(field_name: str) -> Optional[pd.Series]:
+        if field_name not in data_df.columns:
+            return None
+        s = data_df[field_name]
+        if isinstance(s, pd.DataFrame):
+            s = s.iloc[:, 0]
+        return s
+
     # --- 1. Completeness ---
     for field in TARGET_FIELDS:
-        if field not in data_df.columns:
+        col = get_series(field)
+        if col is None:
             continue
-        col = data_df[field]
-        null_count = col.isna().sum() + (col == "").sum()
+        null_count = int(col.isna().sum() + (col == "").sum())
         total = len(col)
         if total == 0:
             continue
-        null_pct = null_count / total * 100
+        null_pct = float(null_count / total * 100)
 
         if null_pct > 50:
             severity = Severity.HIGH
@@ -125,9 +148,10 @@ def detect_quality_issues(
 
     # --- 2. Monetary field validation ---
     for field in MONETARY_FIELDS:
-        if field not in data_df.columns:
+        col_raw = get_series(field)
+        if col_raw is None:
             continue
-        col = data_df[field].dropna()
+        col = col_raw.dropna()
         if len(col) == 0:
             continue
 
@@ -383,7 +407,10 @@ def compute_completeness(data_df: pd.DataFrame) -> Dict[str, float]:
             if total == 0:
                 result[field] = 0.0
             else:
-                non_null = data_df[field].notna().sum()
+                col = data_df[field]
+                if isinstance(col, pd.DataFrame):
+                    col = col.iloc[:, 0]
+                non_null = int(col.notna().sum())
                 result[field] = round(non_null / total * 100, 2)
         else:
             result[field] = 0.0

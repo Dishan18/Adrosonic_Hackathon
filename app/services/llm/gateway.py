@@ -46,31 +46,32 @@ class LLMGateway:
         if client is None:
             raise RuntimeError("Groq client not available or GROQ_API_KEY not configured")
 
-        try:
-            response = client.chat.completions.create(
-                model=model,
-                messages=messages,
-                temperature=temperature,
-                max_tokens=4096,
-            )
-            return response.choices[0].message.content or ""
-        except Exception as e:
-            err_str = str(e).lower()
-            if "model_not_found" in err_str or "does not exist" in err_str:
-                for alt_model in ["qwen/qwen3.8-27b", "openai/gpt-oss-120b", "allam-2-7b"]:
-                    if alt_model != model:
-                        try:
-                            logger.info("Groq model '%s' unavailable, falling back to '%s'", model, alt_model)
-                            response = client.chat.completions.create(
-                                model=alt_model,
-                                messages=messages,
-                                temperature=temperature,
-                                max_tokens=4096,
-                            )
-                            return response.choices[0].message.content or ""
-                        except Exception:
-                            continue
-            raise
+        active_model = getattr(self, "_working_groq_model", model)
+        candidate_models = [active_model, "openai/gpt-oss-120b", "openai/gpt-oss-20b", "allam-2-7b", "qwen/qwen3.8-27b"]
+        seen_models = set()
+
+        last_error = None
+        for m in candidate_models:
+            if m in seen_models:
+                continue
+            seen_models.add(m)
+            try:
+                response = client.chat.completions.create(
+                    model=m,
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=4096,
+                )
+                self._working_groq_model = m
+                return response.choices[0].message.content or ""
+            except Exception as e:
+                last_error = e
+                logger.warning("Groq model '%s' failed (%s), trying next candidate", m, e)
+                continue
+
+        if last_error:
+            raise last_error
+        raise RuntimeError("No Groq models available")
 
     def _call_gemini(self, messages: list, temperature: float = 0.1) -> str:
         import httpx
@@ -120,54 +121,64 @@ class LLMGateway:
         parts = candidates[0].get("content", {}).get("parts", [])
         return "".join(p.get("text", "") for p in parts)
 
-    def _call_ollama(self, messages: list, temperature: float = 0.1) -> str:
+    def _call_ollama(self, messages: list, temperature: float = 0.1, json_mode: bool = False) -> str:
         import httpx
-        base_url = self.config.OLLAMA_BASE_URL
+        base_url = (self.config.OLLAMA_BASE_URL or "http://localhost:11434").rstrip("/")
         payload = {
-            "model": self.config.OLLAMA_MODEL,
+            "model": self.config.OLLAMA_MODEL or "mistral",
             "messages": messages,
             "stream": False,
             "options": {"temperature": temperature},
         }
-        resp = httpx.post(f"{base_url}/api/chat", json=payload, timeout=120)
+        if json_mode:
+            payload["format"] = "json"
+
+        resp = httpx.post(f"{base_url}/api/chat", json=payload, timeout=60)
         resp.raise_for_status()
-        return resp.json()["message"]["content"]
+        return resp.json().get("message", {}).get("content", "")
 
     def complete(
         self,
         messages: list,
         temperature: float = 0.1,
         retries: int = 2,
+        json_mode: bool = False,
     ) -> Optional[str]:
         """
-        Send a chat completion request with automatic multi-provider fallback:
-        Primary (Groq) -> Fallback (Gemini) -> Fallback (Ollama).
+        Send a chat completion request with provider prioritization and fallback:
+        Prioritizes the provider set in LLM_PROVIDER ('ollama', 'groq', or 'gemini').
         """
-        # 1. Attempt Groq if configured
-        if self.config.GROQ_API_KEY:
-            for attempt in range(retries + 1):
+        provider = (self.config.LLM_PROVIDER or "ollama").lower()
+        if provider == "ollama":
+            order = ["ollama", "groq", "gemini"]
+        elif provider == "gemini":
+            order = ["gemini", "groq", "ollama"]
+        else:
+            order = ["groq", "ollama", "gemini"]
+
+        for prov in order:
+            if prov == "ollama" and (self.config.OLLAMA_BASE_URL or provider == "ollama"):
                 try:
-                    return self._call_groq(messages, self.config.GROQ_MODEL, temperature)
+                    res = self._call_ollama(messages, temperature, json_mode=json_mode)
+                    if res:
+                        return res
                 except Exception as e:
-                    logger.warning("Groq attempt %d failed: %s", attempt + 1, e)
-                    if attempt < retries:
-                        time.sleep(1)
+                    logger.warning("Ollama provider failed (%s), trying next fallback", e)
 
-        # 2. Fallback to Gemini if configured
-        if self.config.GEMINI_API_KEY:
-            logger.info("Attempting Gemini fallback...")
-            try:
-                return self._call_gemini(messages, temperature)
-            except Exception as e:
-                logger.warning("Gemini fallback failed: %s", e)
+            elif prov == "groq" and self.config.GROQ_API_KEY:
+                for attempt in range(retries + 1):
+                    try:
+                        return self._call_groq(messages, self.config.GROQ_MODEL, temperature)
+                    except Exception as e:
+                        logger.warning("Groq attempt %d failed: %s", attempt + 1, e)
+                        if attempt < retries:
+                            time.sleep(1)
 
-        # 3. Fallback to Ollama if configured
-        if self.config.LLM_PROVIDER == "ollama" or (hasattr(self.config, "OLLAMA_BASE_URL") and self.config.OLLAMA_BASE_URL):
-            logger.info("Attempting Ollama fallback...")
-            try:
-                return self._call_ollama(messages, temperature)
-            except Exception as e:
-                logger.warning("Ollama fallback failed: %s", e)
+            elif prov == "gemini" and self.config.GEMINI_API_KEY:
+                try:
+                    return self._call_gemini(messages, temperature)
+                except Exception as e:
+                    logger.warning("Gemini provider failed: %s", e)
 
         logger.error("All configured LLM providers failed or unavailable.")
         return None
@@ -183,28 +194,28 @@ class LLMGateway:
         Call LLM and parse response as a Pydantic model.
         Returns None if unavailable or validation fails repeatedly.
         """
+        import re
+
         system_instruction = (
             f"\n\nYou MUST respond with valid JSON that matches this schema: "
             f"{response_model.model_json_schema()}\n"
             f"Respond ONLY with raw JSON, no markdown, no explanation."
         )
 
-        # Append schema instruction to last system message or add new one
         augmented = list(messages)
         augmented.append({"role": "system", "content": system_instruction})
 
         for attempt in range(retries + 1):
-            raw = self.complete(augmented, temperature=temperature, retries=0)
+            raw = self.complete(augmented, temperature=temperature, retries=0, json_mode=True)
             if raw is None:
                 return None
             try:
-                # Strip markdown code fences if present
                 text = raw.strip()
-                if text.startswith("```"):
-                    text = text.split("```")[1]
-                    if text.startswith("json"):
-                        text = text[4:]
-                data = json.loads(text)
+                match = re.search(r"\{.*\}", text, re.DOTALL)
+                if match:
+                    data = json.loads(match.group(0))
+                else:
+                    data = json.loads(text)
                 return response_model.model_validate(data)
             except Exception as e:
                 logger.warning(

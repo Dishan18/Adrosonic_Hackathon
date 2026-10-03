@@ -116,17 +116,19 @@ def normalize_sprinkler_code(value: Any) -> Any:
     """Normalize sprinkler codes to canonical form."""
     if pd.isna(value) or value is None:
         return value
-    s = str(value).strip()
-    mapping = {
-        "yes": "Y", "true": "Y", "1": "Y",
-        "no": "N", "false": "N", "0": "N",
-        "y 13": "Y13", "y13r": "Y(13R)", "y (13r)": "Y(13R)",
-    }
-    upper = s.upper()
-    if upper in {"Y", "N", "Y13", "Y(13R)"}:
-        return upper
-    normalized = mapping.get(s.lower(), s)
-    return normalized
+    try:
+        s = str(value).strip()
+        mapping = {
+            "yes": "Y", "true": "Y", "1": "Y",
+            "no": "N", "false": "N", "0": "N",
+            "y 13": "Y13", "y13r": "Y(13R)", "y (13r)": "Y(13R)",
+        }
+        upper = s.upper()
+        if upper in {"Y", "N", "Y13", "Y(13R)"}:
+            return upper
+        return mapping.get(s.lower(), s)
+    except Exception:
+        return value
 
 
 def normalize_date(value: Any) -> Any:
@@ -221,7 +223,16 @@ def apply_transformation_to_series(operation: str, series: pd.Series) -> pd.Seri
     if operation not in TRANSFORMATION_REGISTRY:
         raise ValueError(f"Operation '{operation}' is not whitelisted.")
     fn = TRANSFORMATION_REGISTRY[operation]
-    return series.apply(fn)
+    try:
+        return series.apply(fn)
+    except Exception:
+        results = []
+        for val in series:
+            try:
+                results.append(fn(val))
+            except Exception:
+                results.append(val)
+        return pd.Series(results, index=series.index)
 
 
 def suggest_operation_for_target(target_field: str, source_col_sample: pd.Series) -> str:

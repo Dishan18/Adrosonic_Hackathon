@@ -354,6 +354,8 @@ def map_column(
     Returns a ColumnMapping.
     """
     # Profile values
+    if isinstance(series, pd.DataFrame):
+        series = series.iloc[:, 0]
     value_profile = profile_column(series)
 
     # Sample values (limited, for LLM)
@@ -478,11 +480,27 @@ def map_column(
     # Add top value-profile candidates
     for field in TARGET_FIELDS:
         vpf_score = score_value_profile_fit(value_profile, field)
-        if vpf_score > 0.3 and field not in already_mapped:
+        if vpf_score > 0.35 and field not in already_mapped:
             candidates.append((field, vpf_score))
     candidates = sorted(candidates, key=lambda x: -x[1])[:5]
 
-    llm_result = _stage4_llm(source_col, sample_values, candidates)
+    # Only call LLM if there is a plausible candidate with reasonable signal
+    plausible = [c for c in candidates if c[1] >= 0.35]
+    if not plausible:
+        return ColumnMapping(
+            source_column=source_col,
+            target=None,
+            confidence=0.0,
+            method=MappingMethod.UNRESOLVED,
+            rationale="No candidate fields met minimum similarity threshold.",
+            evidence=["All mapping stages returned insufficient confidence."],
+            review_required=True,
+            value_profile_fit=0.0,
+            name_similarity=0.0,
+            method_agreement=0.0,
+        )
+
+    llm_result = _stage4_llm(source_col, sample_values, plausible)
     if llm_result:
         llm_target, llm_conf, llm_evidence = llm_result
         if llm_target and llm_target not in already_mapped:
@@ -611,7 +629,10 @@ def run_schema_mapping(state: SOVState) -> SOVState:
             ))
             continue
 
-        mapping = map_column(col, data_df[col], already_mapped)
+        col_data = data_df[col]
+        if isinstance(col_data, pd.DataFrame):
+            col_data = col_data.iloc[:, 0]
+        mapping = map_column(col, col_data, already_mapped)
         if mapping.target:
             already_mapped.add(mapping.target)
         raw_mappings.append(mapping)
