@@ -422,6 +422,8 @@
     <a href="#state-models">State Transitions</a>
     <a href="#folder-structure">File Breakdown</a>
     <a href="#production-scale">Production & Scale</a>
+    <a href="#interview-questions">Interview Questions</a>
+    <a href="algo.html" style="color:var(--primary); font-weight:600;">Algo Whitepaper &rarr;</a>
   </nav>
 
   <!-- Section 1: Tech Stack -->
@@ -914,6 +916,189 @@
         <li><strong>Immutable Tamper-Evident Audit Trails:</strong> Export audit log entries with SHA-256 hash chains to satisfy internal model governance and external insurance regulator examinations (NAIC / Lloyd's compliance).</li>
         <li><strong>PII Redaction:</strong> Strip individual property owner names or contact phone numbers prior to any third-party LLM inference.</li>
       </ul>
+    </div>
+  </section>
+
+  <!-- Section 8: Interview Questions & Deep-Dive Technical Answers -->
+  <section id="interview-questions">
+    <h2>8. Comprehensive Interview Questions & Technical Deep-Dive</h2>
+    <p>A curated set of challenging questions frequently asked by technical interviewers, system architects, and hiring managers regarding this system's design, algorithmic trade-offs, and implementation details.</p>
+
+    <!-- Category A -->
+    <div style="margin-top: 24px;">
+      <h3 style="color: var(--primary); font-size: 16px; margin-bottom: 14px;">Category A: Multi-Agent Architecture & LangGraph Design</h3>
+
+      <div class="card">
+        <h4 style="font-size: 15px; font-weight: 600; color: var(--text-dark); margin-bottom: 6px;">Q1: Why did you choose an Agentic / Multi-Agent architecture instead of a single prompt sending the entire spreadsheet to GPT-4o or Claude 3.5 Sonnet?</h4>
+        <p style="font-size: 12px; font-weight: 600; text-transform: uppercase; color: var(--primary); letter-spacing: 0.05em; margin-bottom: 8px;">Evaluation Target: Context window costs, hallucination control, latency, and determinism</p>
+        <div style="font-size: 13.5px; color: var(--text); line-height: 1.55;">
+          <strong>Model Answer:</strong>
+          <p style="margin-top: 6px;">In commercial insurance underwriting, using an LLM as a monolithic end-to-end data transformer is fundamentally flawed for four primary reasons:</p>
+          <ul style="margin-left: 20px; margin-top: 6px;">
+            <li><strong>Hallucination & Numerical Integrity:</strong> LLMs are autoregressive token predictors, not execution engines. Asking an LLM to rewrite thousands of rows containing Building Values (e.g. $45,230,000) risks subtle token mutations, row dropouts, or synthetic value fabrication, which creates catastrophic underwriting exposure errors.</li>
+            <li><strong>Context Window & Cost Explosion:</strong> Production SOVs easily exceed 10,000 rows. Sending entire raw tables to frontier models consumes millions of tokens, triggering exorbitant API bills and multi-minute response latencies.</li>
+            <li><strong>Separation of Concerns:</strong> Our multi-agent system decouples <em>Discovery</em> (structural layout), <em>Mapping</em> (lexical & semantic alignment), <em>Quality Reasoning</em> (business rule audit), and <em>Transformation</em> (deterministic execution). Each agent has a single, verifiable responsibility.</li>
+            <li><strong>Deterministic Sandbox:</strong> In our system, the LLM is restricted strictly to an advisory role (reasoning and selecting whitelisted functions). Only pre-validated, pure Python routines ever mutate cell data.</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="card">
+        <h4 style="font-size: 15px; font-weight: 600; color: var(--text-dark); margin-bottom: 6px;">Q2: How does your LangGraph state container enforce immutability and handle state rollbacks on failure?</h4>
+        <p style="font-size: 12px; font-weight: 600; text-transform: uppercase; color: var(--primary); letter-spacing: 0.05em; margin-bottom: 8px;">Evaluation Target: Distributed state design, Pydantic V2 deep copying, error recovery</p>
+        <div style="font-size: 13.5px; color: var(--text); line-height: 1.55;">
+          <strong>Model Answer:</strong>
+          <p style="margin-top: 6px;">Every LangGraph node function in <code>app/agents/</code> receives a typed <code>SOVState</code> instance and immediately executes <code>state = state.model_copy(deep=True)</code> before performing any mutations. This guarantees that:</p>
+          <ul style="margin-left: 20px; margin-top: 6px;">
+            <li>No agent inadvertently mutates previous stage snapshots via reference sharing.</li>
+            <li>If an unhandled exception or Pandera schema validation failure occurs in <em>Agent 4</em>, the system captures the failure state in <code>state.stage = WorkflowStage.ERROR</code> or <code>WorkflowStage.VALIDATING</code> without corrupting intermediate mapping or profiling states.</li>
+            <li>The human reviewer can interactively adjust, reject, or override recommendations without requiring the system to re-run expensive sheet discovery or vector embedding computations from scratch.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <!-- Category B -->
+    <div style="margin-top: 24px;">
+      <h3 style="color: var(--primary); font-size: 16px; margin-bottom: 14px;">Category B: Schema Mapping, NLP & Vector Retrieval</h3>
+
+      <div class="card">
+        <h4 style="font-size: 15px; font-weight: 600; color: var(--text-dark); margin-bottom: 6px;">Q3: Walk me through your 4-Tier Schema Mapping cascade. Why not use vector search for all columns?</h4>
+        <p style="font-size: 12px; font-weight: 600; text-transform: uppercase; color: var(--primary); letter-spacing: 0.05em; margin-bottom: 8px;">Evaluation Target: Latency hierarchies, algorithmic efficiency, semantic false positives</p>
+        <div style="font-size: 13.5px; color: var(--text); line-height: 1.55;">
+          <strong>Model Answer:</strong>
+          <p style="margin-top: 6px;">Vector search is computationally heavier (~5–10ms per query) and is prone to semantic false positives on domain-specific acronyms. Our 4-tier cascade implements a strict efficiency and precision hierarchy:</p>
+          <ul style="margin-left: 20px; margin-top: 6px;">
+            <li><strong>Tier 0 (ChromaDB Memory):</strong> Checked first. If a broker previously submitted column "Loc Bldg Identifier" and an underwriter approved it to <code>Reference</code>, vector memory returns this in &lt; 2ms with an approved memory confidence multiplier (1.10x).</li>
+            <li><strong>Tier 1 (Exact Normalized Hash):</strong> $O(1)$ hash table lookup against 17 canonical names and 80+ standard insurance synonyms. Resolves ~60% of columns in microseconds with 0.97 confidence.</li>
+            <li><strong>Tier 2 (RapidFuzz Token Sort Ratio):</strong> Handles minor typos, punctuation differences, and word re-orderings (e.g. "Values - Building" vs "Building Values"). Threshold cutoff is set at 78%.</li>
+            <li><strong>Tier 3 (Dense BGE Embeddings):</strong> Evaluates cosine similarity using <code>BAAI/bge-small-en-v1.5</code> (384 dimensions) against canonical definitions. Handles semantic synonyms like "Time Element" &harr; <code>BI</code>.</li>
+            <li><strong>Tier 4 (LLM Gateway):</strong> Invoked <em>only</em> if prior tiers fail or produce conflicting signals. The LLM receives masked sample rows and candidate targets, returning a strictly structured JSON decision.</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="card">
+        <h4 style="font-size: 15px; font-weight: 600; color: var(--text-dark); margin-bottom: 6px;">Q4: What is the Hungarian Conflict Resolution algorithm, and why is it necessary in SOV cleansing?</h4>
+        <p style="font-size: 12px; font-weight: 600; text-transform: uppercase; color: var(--primary); letter-spacing: 0.05em; margin-bottom: 8px;">Evaluation Target: Bipartite matching, 1:1 constraints, collision prevention</p>
+        <div style="font-size: 13.5px; color: var(--text); line-height: 1.55;">
+          <strong>Model Answer:</strong>
+          <p style="margin-top: 6px;">In real-world broker files, multiple raw columns frequently show high similarity to the same canonical target. For example, a workbook may contain both <code>Building Limit</code> and <code>Building Notes</code>. A naive mapper could map both to <code>Building Value</code>, corrupting the downstream underwriting feed.</p>
+          <p style="margin-top: 6px;">Our Hungarian assignment step enforces a strict <strong>1:1 injective target constraint</strong>:</p>
+          <ul style="margin-left: 20px; margin-top: 6px;">
+            <li>Groups all source column mappings by target field.</li>
+            <li>If $|C_{\text{target}}| > 1$, evaluates their calibrated multi-modal confidence scores ($W_{\text{name}} \cdot S_{\text{name}} + W_{\text{value}} \cdot V_{\text{profile}} + W_{\text{method}} \cdot A_{\text{method}}$).</li>
+            <li>Assigns the target exclusively to the maximum-confidence column: $C^* = \arg\max_i \text{Confidence}(C_i \to T)$.</li>
+            <li>Demotes all competing columns to <code>UNRESOLVED</code> with confidence 0.0 and logs an explicit demotion rationale in the audit trail.</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="card">
+        <h4 style="font-size: 15px; font-weight: 600; color: var(--text-dark); margin-bottom: 6px;">Q5: What is "Value Profile Fit" (VPF) and how does it prevent catastrophic mapping errors?</h4>
+        <p style="font-size: 12px; font-weight: 600; text-transform: uppercase; color: var(--primary); letter-spacing: 0.05em; margin-bottom: 8px;">Evaluation Target: Multi-modal signal fusion, data distribution profiling, defensive AI</p>
+        <div style="font-size: 13.5px; color: var(--text); line-height: 1.55;">
+          <strong>Model Answer:</strong>
+          <p style="margin-top: 6px;">Relying purely on column header names is dangerous because brokers use misleading or overloaded labels. For example, a column labeled "State" could contain building status descriptions ("Under Construction", "Vacant") rather than geographic US state abbreviations ("CA", "TX"). Conversely, a column labeled "Coverage 1" might contain dollar amounts ($2,500,000).</p>
+          <p style="margin-top: 6px;">The <code>profiling.py</code> module inspects actual cell data:</p>
+          <ul style="margin-left: 20px; margin-top: 6px;">
+            <li>Computes numeric ratio, currency ratio, date/year patterns, 5-digit ZIP codes, and 2-letter postal codes.</li>
+            <li><code>score_value_profile_fit(profile, target)</code> produces a score from 0.0 to 1.0.</li>
+            <li>If a column labeled "State" has zero 2-letter state codes and a 95% numeric ratio, its VPF for <code>State</code> collapses to 0.0. In the confidence formula ($0.45 S_{\text{name}} + 0.35 V_{\text{profile}} + 0.20 A_{\text{method}}$), this drop pulls the total confidence below the 0.50 threshold, routing the column to human review rather than silently corrupting the dataset.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <!-- Category C -->
+    <div style="margin-top: 24px;">
+      <h3 style="color: var(--primary); font-size: 16px; margin-bottom: 14px;">Category C: Data Engineering, Resiliency & Edge Cases</h3>
+
+      <div class="card">
+        <h4 style="font-size: 15px; font-weight: 600; color: var(--text-dark); margin-bottom: 6px;">Q6: How do you handle merged cells, forward filling, and multi-tier headers in OpenPyXL?</h4>
+        <p style="font-size: 12px; font-weight: 600; text-transform: uppercase; color: var(--primary); letter-spacing: 0.05em; margin-bottom: 8px;">Evaluation Target: Low-level spreadsheet parsing, Excel object model</p>
+        <div style="font-size: 13.5px; color: var(--text); line-height: 1.55;">
+          <strong>Model Answer:</strong>
+          <p style="margin-top: 6px;">Standard <code>pd.read_excel()</code> fails on complex merged headers because it places the cell value in the top-left coordinate and leaves all other spanned coordinates as <code>NaN</code>. Our <code>unmerge_and_forward_fill()</code> implementation handles this cleanly:</p>
+          <ol style="margin-left: 20px; margin-top: 6px;">
+            <li>Opens the workbook using <code>openpyxl.load_workbook(path, data_only=True)</code> to capture calculated formula results rather than raw formula text strings.</li>
+            <li>Extracts all range coordinates from <code>worksheet.merged_cells.ranges</code>.</li>
+            <li>For each range $(r_{\min}, c_{\min}) \dots (r_{\max}, c_{\max})$, reads the master value at $(r_{\min}, c_{\min})$.</li>
+            <li>Unmerges the range via <code>worksheet.unmerge_cells()</code> and writes the master value into every sub-cell across both rows and columns.</li>
+            <li>Passes the sanitized grid to pandas, preserving parent category names across sub-columns.</li>
+          </ol>
+        </div>
+      </div>
+
+      <div class="card">
+        <h4 style="font-size: 15px; font-weight: 600; color: var(--text-dark); margin-bottom: 6px;">Q7: You encountered a pandas <code>AttributeError: 'DataFrame' object has no attribute 'str'</code> during production testing. What caused it and how did you resolve it?</h4>
+        <p style="font-size: 12px; font-weight: 600; text-transform: uppercase; color: var(--primary); letter-spacing: 0.05em; margin-bottom: 8px;">Evaluation Target: Real-world debugging, Pandas internal mechanics, DataFrame vs Series slicing</p>
+        <div style="font-size: 13.5px; color: var(--text); line-height: 1.55;">
+          <strong>Model Answer:</strong>
+          <p style="margin-top: 6px;">In broker file <code>SOV_B4ID.xlsx</code>, three separate columns shared the exact same header: <code>"2024 - Increase 10%"</code>. In pandas, slicing <code>df[col]</code> returns a <code>pd.Series</code> if <code>col</code> is unique, but returns a 2D <code>pd.DataFrame</code> if <code>col</code> appears multiple times.</p>
+          <p style="margin-top: 6px;">Downstream profiling code called <code>series.dropna().astype(str).str.strip()</code>. Calling <code>.str</code> on a DataFrame raises <code>AttributeError</code> because <code>.str</code> is an accessor exclusive to Series.</p>
+          <p style="margin-top: 6px;"><strong>The Fix:</strong></p>
+          <ul style="margin-left: 20px; margin-top: 6px;">
+            <li>In <code>workbook.py::extract_data_frame()</code>, implemented automatic header deduplication during initial extraction (appending <code>_1</code>, <code>_2</code> suffixes to duplicate names).</li>
+            <li>In <code>profiling.py::profile_column()</code> and <code>schema_mapping.py::map_column()</code>, added defensive type checks: <code>if isinstance(series, pd.DataFrame): series = series.iloc[:, 0]</code>.</li>
+            <li>In <code>transformation.py</code>, disambiguated duplicate target columns by calculating non-null counts across candidate slices and preserving the slice with the highest information density.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <!-- Category D -->
+    <div style="margin-top: 24px;">
+      <h3 style="color: var(--primary); font-size: 16px; margin-bottom: 14px;">Category D: Scalability, Productionization & LLM Failovers</h3>
+
+      <div class="card">
+        <h4 style="font-size: 15px; font-weight: 600; color: var(--text-dark); margin-bottom: 6px;">Q8: How does your system behave when cloud LLM rate limits (e.g. Groq TPM limits) or network outages occur?</h4>
+        <p style="font-size: 12px; font-weight: 600; text-transform: uppercase; color: var(--primary); letter-spacing: 0.05em; margin-bottom: 8px;">Evaluation Target: High availability, circuit breakers, graceful degradation</p>
+        <div style="font-size: 13.5px; color: var(--text); line-height: 1.55;">
+          <strong>Model Answer:</strong>
+          <p style="margin-top: 6px;">The system implements a multi-provider fallback hierarchy inside <code>app/services/llm/gateway.py</code>:</p>
+          <ul style="margin-left: 20px; margin-top: 6px;">
+            <li><strong>Gateway Client Abstraction:</strong> Code interacts with <code>get_llm()</code> rather than calling provider-specific SDKs directly.</li>
+            <li><strong>Automatic Local Failover:</strong> If the primary provider (e.g. Groq) encounters an HTTP 429 (Rate Limit Exceeded) or connection timeout, the gateway falls back immediately to local Ollama running <code>mistral:latest</code> on port 11434.</li>
+            <li><strong>Safe Degradation:</strong> If local Ollama is also unavailable or times out, the pipeline <em>does not crash</em>. It gracefully demotes unresolved columns to <code>UNRESOLVED</code>, flags them for human review, and continues executing all deterministic mappings and Pandera validations.</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="card">
+        <h4 style="font-size: 15px; font-weight: 600; color: var(--text-dark); margin-bottom: 6px;">Q9: How would you scale this application to process 50,000 SOVs per day in an enterprise insurance carrier?</h4>
+        <p style="font-size: 12px; font-weight: 600; text-transform: uppercase; color: var(--primary); letter-spacing: 0.05em; margin-bottom: 8px;">Evaluation Target: System design, distributed systems, queuing, database partitioning</p>
+        <div style="font-size: 13.5px; color: var(--text); line-height: 1.55;">
+          <strong>Model Answer:</strong>
+          <p style="margin-top: 6px;">To transition from the current single-instance Streamlit app to an enterprise underwriting fabric:</p>
+          <ul style="margin-left: 20px; margin-top: 6px;">
+            <li><strong>Decouple Frontend & Backend:</strong> Expose async REST APIs via FastAPI (e.g., <code>POST /api/v1/sov/ingest</code>, <code>GET /api/v1/sov/{id}/status</code>, <code>POST /api/v1/sov/{id}/decide</code>). Stream real-time stage progress to client SPAs via WebSockets.</li>
+            <li><strong>Distributed Task Workers (Celery + Redis):</strong> Enqueue incoming workbooks onto Redis task queues. Stateless Celery worker pods deployed on AWS EKS or ECS handle unmerging, embedding generation, and Pandera validation horizontally.</li>
+            <li><strong>Database Migration (PostgreSQL + pgvector):</strong> Replace local ChromaDB with a centralized PostgreSQL cluster using <code>pgvector</code>. Partition vector memory by <code>broker_id</code> so firm-specific naming conventions are recalled accurately without cross-tenant bleed.</li>
+            <li><strong>Exact Header Redis Cache:</strong> Compute SHA-256 hashes of row-0 headers. If an identical broker spreadsheet layout is processed again, retrieve 100% of mappings from Redis in &lt; 5ms with zero LLM API or embedding costs.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <!-- Category E -->
+    <div style="margin-top: 24px;">
+      <h3 style="color: var(--primary); font-size: 16px; margin-bottom: 14px;">Category E: Governance, Insurance Regulations & Compliance</h3>
+
+      <div class="card">
+        <h4 style="font-size: 15px; font-weight: 600; color: var(--text-dark); margin-bottom: 6px;">Q10: Why is Pandera schema validation superior to traditional Python dictionary checks or pydantic row-by-row iteration in this pipeline?</h4>
+        <p style="font-size: 12px; font-weight: 600; text-transform: uppercase; color: var(--primary); letter-spacing: 0.05em; margin-bottom: 8px;">Evaluation Target: Vectorized validation, memory performance, schema contracts</p>
+        <div style="font-size: 13.5px; color: var(--text); line-height: 1.55;">
+          <strong>Model Answer:</strong>
+          <p style="margin-top: 6px;">Validating large tables (e.g. 50,000 rows &times; 17 columns = 850,000 cells) by instantiating individual Pydantic model objects per row is computationally expensive, consuming significant memory and taking tens of seconds in Python loops.</p>
+          <p style="margin-top: 6px;"><strong>Pandera</strong> validates the entire DataFrame as a single vectorized columnar structure:</p>
+          <ul style="margin-left: 20px; margin-top: 6px;">
+            <li><strong>Vectorized Speed:</strong> Executes column-level null checks, dtype verifications, and ordering constraints in milliseconds using optimized C/Cython routines.</li>
+            <li><strong>Lazy Error Aggregation:</strong> Using <code>schema.validate(df, lazy=True)</code>, Pandera does not stop at the first error; it collects all schema violations across all columns in a single pass, providing a comprehensive diagnostic report to the user.</li>
+            <li><strong>Strict Invariance:</strong> Pandera enforces exact column counts (17), exact column names, and strict column ordering in a single declarative block before any file is serialized to disk.</li>
+          </ul>
+        </div>
+      </div>
     </div>
   </section>
 

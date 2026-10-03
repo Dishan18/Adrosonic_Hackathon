@@ -1,0 +1,941 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Algorithmic & Mathematical Specifications — Agentic SOV Intelligence</title>
+  <style>
+    :root {
+      --bg: #F8F9FA;
+      --card-bg: #FFFFFF;
+      --border: #E5E7EB;
+      --border-dark: #D1D5DB;
+      --text: #1F2937;
+      --text-muted: #6B7280;
+      --text-dark: #111827;
+      --primary: #0071E3;
+      --primary-light: #EBF5FF;
+      --accent-green: #047857;
+      --accent-green-bg: #ECFDF5;
+      --accent-green-border: #A7F3D0;
+      --accent-amber: #B45309;
+      --accent-amber-bg: #FFFBEB;
+      --accent-amber-border: #FDE68A;
+      --accent-red: #B91C1C;
+      --accent-red-bg: #FEF2F2;
+      --accent-purple: #6D28D9;
+      --accent-purple-bg: #F5F3FF;
+      --code-bg: #F3F4F6;
+      --radius: 10px;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Inter", "Segoe UI", Roboto, sans-serif;
+      background-color: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      padding: 0;
+      margin: 0;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .container {
+      max-width: 1140px;
+      margin: 0 auto;
+      padding: 40px 24px 100px 24px;
+    }
+
+    /* Navigation / Header */
+    .hero {
+      margin-bottom: 36px;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 28px;
+    }
+
+    .hero-eyebrow {
+      font-size: 13px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--primary);
+      margin-bottom: 6px;
+    }
+
+    .hero h1 {
+      font-size: 32px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      color: var(--text-dark);
+      margin-bottom: 10px;
+    }
+
+    .hero p {
+      font-size: 16px;
+      color: var(--text-muted);
+      max-width: 860px;
+      line-height: 1.5;
+    }
+
+    .nav-bar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 24px;
+      padding: 12px 16px;
+      background: #FFFFFF;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: 0 1px 2px rgba(0,0,0,0.02);
+    }
+
+    .nav-btn {
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text);
+      text-decoration: none;
+      padding: 6px 12px;
+      border-radius: 6px;
+      background: var(--bg);
+      transition: all 0.15s ease;
+    }
+
+    .nav-btn:hover {
+      background: var(--primary);
+      color: #FFFFFF;
+    }
+
+    /* Sections & Cards */
+    section {
+      margin-bottom: 48px;
+    }
+
+    h2 {
+      font-size: 22px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+      color: var(--text-dark);
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .badge-agent {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      padding: 3px 8px;
+      border-radius: 4px;
+      background: var(--primary-light);
+      color: var(--primary);
+    }
+
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 24px;
+      margin-bottom: 20px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.02);
+    }
+
+    .card h3 {
+      font-size: 16px;
+      font-weight: 600;
+      color: var(--text-dark);
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .complexity-pill {
+      font-size: 12px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      padding: 3px 8px;
+      border-radius: 5px;
+      background: var(--code-bg);
+      color: var(--text-dark);
+      border: 1px solid var(--border-dark);
+    }
+
+    /* Mathematical Formula Box */
+    .formula-box {
+      background: #FFFFFF;
+      border-left: 4px solid var(--primary);
+      border-top: 1px solid var(--border);
+      border-right: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+      border-radius: 0 var(--radius) var(--radius) 0;
+      padding: 16px 20px;
+      margin: 16px 0;
+      font-family: "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+
+    .formula-title {
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      margin-bottom: 8px;
+    }
+
+    .math-display {
+      font-family: "Cambria Math", "Times New Roman", serif;
+      font-size: 17px;
+      color: #111827;
+      margin: 8px 0;
+      overflow-x: auto;
+      padding-bottom: 4px;
+    }
+
+    .formula-desc {
+      font-size: 13.5px;
+      color: var(--text-muted);
+      margin-top: 6px;
+      line-height: 1.5;
+    }
+
+    /* Algorithm Step Box */
+    .algo-steps {
+      list-style: none;
+      counter-reset: algo-counter;
+      margin-top: 14px;
+    }
+
+    .algo-steps li {
+      counter-increment: algo-counter;
+      position: relative;
+      padding-left: 36px;
+      margin-bottom: 14px;
+      font-size: 14px;
+      line-height: 1.55;
+    }
+
+    .algo-steps li::before {
+      content: counter(algo-counter);
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 24px;
+      height: 24px;
+      background: var(--bg);
+      border: 1px solid var(--border-dark);
+      border-radius: 50%;
+      text-align: center;
+      font-size: 12px;
+      font-weight: 600;
+      line-height: 22px;
+      color: var(--text-dark);
+    }
+
+    /* Code Blocks */
+    pre, code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+
+    pre {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px;
+      font-size: 12.5px;
+      line-height: 1.5;
+      overflow-x: auto;
+      margin: 12px 0;
+      color: #111827;
+    }
+
+    p code, li code, td code {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      padding: 1px 5px;
+      border-radius: 4px;
+      font-size: 12px;
+      color: #111827;
+    }
+
+    /* Tables */
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 16px 0;
+      font-size: 13.5px;
+      background: #FFFFFF;
+      border-radius: var(--radius);
+      overflow: hidden;
+      border: 1px solid var(--border);
+    }
+
+    th, td {
+      padding: 12px 14px;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+    }
+
+    th {
+      background: var(--bg);
+      font-weight: 600;
+      color: var(--text-dark);
+      font-size: 12.5px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    tr:last-child td {
+      border-bottom: none;
+    }
+
+    tr:hover td {
+      background: #FAFBFC;
+    }
+
+    /* Grid Layouts */
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+
+    @media (max-width: 820px) {
+      .grid-2 {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .badge-pill {
+      display: inline-block;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 2px 7px;
+      border-radius: 10px;
+    }
+
+    .badge-green { background: var(--accent-green-bg); color: var(--accent-green); border: 1px solid var(--accent-green-border); }
+    .badge-amber { background: var(--accent-amber-bg); color: var(--accent-amber); border: 1px solid var(--accent-amber-border); }
+    .badge-purple { background: var(--accent-purple-bg); color: var(--accent-purple); border: 1px solid #DDD6FE; }
+
+    footer {
+      margin-top: 60px;
+      border-top: 1px solid var(--border);
+      padding-top: 24px;
+      text-align: center;
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+  </style>
+</head>
+<body>
+
+<div class="container">
+
+  <!-- Header -->
+  <header class="hero">
+    <div class="hero-eyebrow">Technical Reference &bull; Mathematics & Complexity</div>
+    <h1>Algorithmic Engine & Inner Agent Workings</h1>
+    <p>Comprehensive mathematical formulations, step-by-step pseudo-code, heuristics, confidence scoring calibration, and asymptotic time/space complexity analysis for all 5 agents.</p>
+
+    <div class="nav-bar">
+      <a href="#pipeline-flow" class="nav-btn">Pipeline Flow</a>
+      <a href="#agent1-discovery" class="nav-btn">Agent 1: Discovery</a>
+      <a href="#agent2-mapping" class="nav-btn">Agent 2: Mapping</a>
+      <a href="#vpf-matrix" class="nav-btn">Value Profile Fit</a>
+      <a href="#agent3-quality" class="nav-btn">Agent 3: Quality</a>
+      <a href="#agent4-transform" class="nav-btn">Agent 4: Transform</a>
+      <a href="#agent5-validation" class="nav-btn">Agent 5: Validation</a>
+      <a href="#complexity-matrix" class="nav-btn">Complexity Matrix</a>
+      <a href="guide.html" class="nav-btn" style="background:#0071E3; color:#fff;">System Guide &rarr;</a>
+    </div>
+  </header>
+
+  <!-- Section 1: Algorithmic Pipeline Overview -->
+  <section id="pipeline-flow">
+    <h2>1. End-to-End Algorithmic Data Flow</h2>
+    <div class="card">
+      <p style="font-size: 14px; margin-bottom: 16px;">
+        The system models Statement of Values (SOV) processing as a deterministic state machine orchestrated via LangGraph. Each stage receives an immutable snapshot of <code>SOVState</code> and computes a strictly typed progression.
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Stage</th>
+            <th>Agent Name</th>
+            <th>Primary Operation</th>
+            <th>Data Mutability</th>
+            <th>Deterministic?</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>01</strong></td>
+            <td><strong>Sheet Intelligence</strong></td>
+            <td>Unmerges ranges, detects headers via 4-factor scoring, classifies tabs</td>
+            <td>Read-Only (Generates clean DataFrame)</td>
+            <td><span class="badge-pill badge-green">100% Deterministic</span></td>
+          </tr>
+          <tr>
+            <td><strong>02</strong></td>
+            <td><strong>Schema Mapping</strong></td>
+            <td>4-tier cascade: Memory &rarr; Exact &rarr; Fuzzy &rarr; Dense &rarr; LLM + Hungarian</td>
+            <td>Read-Only (Proposes column mappings)</td>
+            <td><span class="badge-pill badge-green">Deterministic (LLM fallback)</span></td>
+          </tr>
+          <tr>
+            <td><strong>03</strong></td>
+            <td><strong>Quality Reasoning</strong></td>
+            <td>Runs 10 deterministic checks, computes completeness & composite score</td>
+            <td>Read-Only (Proposes whitelisted operations)</td>
+            <td><span class="badge-pill badge-green">Deterministic (LLM explains)</span></td>
+          </tr>
+          <tr>
+            <td><strong>04</strong></td>
+            <td><strong>Controlled Transformation</strong></td>
+            <td>Applies approved whitelisted functions, resolves duplicate collisions</td>
+            <td><span class="badge-pill badge-amber">Applies Mutations</span></td>
+            <td><span class="badge-pill badge-green">100% Whitelist Only</span></td>
+          </tr>
+          <tr>
+            <td><strong>05</strong></td>
+            <td><strong>Validation & Export</strong></td>
+            <td>Strict Pandera 17-column ordering, serialization to Cleaned_SOV.xlsx</td>
+            <td>Output Generation</td>
+            <td><span class="badge-pill badge-green">100% Deterministic</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- Section 2: Agent 1 - Sheet Intelligence -->
+  <section id="agent1-discovery">
+    <h2><span class="badge-agent">Agent 1</span> Sheet Intelligence & Header Discovery</h2>
+
+    <div class="card">
+      <h3>
+        <span>1.1 Range Unmerging & Forward Fill Algorithm</span>
+        <span class="complexity-pill">Time: O(M &times; S) | Space: O(R &times; C)</span>
+      </h3>
+      <p style="font-size: 14px; margin-bottom: 12px;">
+        Brokers frequently merge category cells across columns (e.g., merging columns D&ndash;F as "Values (USD)"). Standard pandas parsers fill only the top-left cell and leave subsequent cells as <code>NaN</code>.
+      </p>
+
+      <ol class="algo-steps">
+        <li>Load workbook using <code>openpyxl.load_workbook(path, data_only=True)</code> to evaluate stored formulas.</li>
+        <li>Iterate over <code>ws.merged_cells.ranges</code>. For each cell range $(r_1, c_1) \dots (r_2, c_2)$, extract top-left value $V = \text{cell}(r_1, c_1)$.</li>
+        <li>Unmerge the range using <code>ws.unmerge_cells(range_string)</code>.</li>
+        <li>Propagate $V$ into all $(r, c) \in [r_1, r_2] \times [c_1, c_2]$.</li>
+        <li>Convert worksheet values into a clean <code>pd.DataFrame</code>.</li>
+      </ol>
+    </div>
+
+    <div class="card">
+      <h3>
+        <span>1.2 Header Row Scoring Algorithm</span>
+        <span class="complexity-pill">Time: O(K &times; C) | Space: O(C)</span>
+      </h3>
+      <p style="font-size: 14px;">
+        The algorithm scans the first $K = 30$ rows of the unmerged worksheet to detect the true column header index, ignoring cover banners and corporate logos.
+      </p>
+
+      <div class="formula-box">
+        <div class="formula-title">Candidate Header Row Score Formula</div>
+        <div class="math-display">
+          Score<sub>header</sub>(i) = 0.40 &times; HeaderMatch(i) + 0.20 &times; TextRatio(i) + 0.20 &times; FillRatio(i) + 0.20 &times; DataBelow(i)
+        </div>
+        <div class="formula-desc">
+          Where for row <i>i</i>:
+          <ul style="margin-left: 20px; margin-top: 4px;">
+            <li><strong>HeaderMatch(i)</strong> = fraction of non-null cells matching normalized target field synonyms: <br><code>HeaderMatch(i) = &sum; [norm(cell) &isin; SynonymSet] / max(|non-null|, 1)</code></li>
+            <li><strong>TextRatio(i)</strong> = fraction of non-null cells that are non-numeric strings.</li>
+            <li><strong>FillRatio(i)</strong> = ratio of non-null cells to total row width: <code>|non-null| / max(C, 1)</code>.</li>
+            <li><strong>DataBelow(i)</strong> = fraction of numeric cells in row <i>i+1</i> (headers are followed by numeric data).</li>
+          </ul>
+        </div>
+      </div>
+
+      <p style="font-size: 13.5px; color: var(--text-muted); margin-top: 10px;">
+        <strong>Selection:</strong> <code>header_row = argmax<sub>0 &le; i &lt; min(30, N)</sub> Score<sub>header</sub>(i)</code>
+      </p>
+    </div>
+
+    <div class="card">
+      <h3>
+        <span>1.3 Sheet Classification & Ranking</span>
+        <span class="complexity-pill">Time: O(S &times; (K &times; C + R<sub>sub</sub> &times; C)) | Space: O(S)</span>
+      </h3>
+      <p style="font-size: 14px;">
+        To disambiguate multi-tab workbooks (e.g. "Cover Page", "Summary", "Locations SOV", "Pivot"), the agent calculates a composite viability score for each sheet:
+      </p>
+
+      <div class="formula-box">
+        <div class="formula-title">Sheet Viability Composite Formula</div>
+        <div class="math-display">
+          Score<sub>sheet</sub> = 0.35 &times; S<sub>header</sub> + 0.25 &times; D<sub>density</sub> + 0.20 &times; C<sub>type</sub> + 0.20 &times; V<sub>rows</sub>
+        </div>
+        <div class="formula-desc">
+          <strong>Components:</strong><br>
+          &bull; <code>S<sub>header</sub> = min(1.0, (matches / 17) &times; 3.0)</code>: Synonym match volume.<br>
+          &bull; <code>D<sub>density</sub> = non_null_ratio</code>: Global fill rate of the matrix.<br>
+          &bull; <code>C<sub>type</sub></code>: Type consistency ratio across columns below header (percentage of columns with &gt;80% pure numeric or &gt;80% pure text).<br>
+          &bull; <code>V<sub>rows</sub> = min(1.0, data_rows_below / 100)</code>: Volume factor saturating at 100 rows.
+        </div>
+      </div>
+
+      <div class="formula-box" style="border-left-color: var(--accent-green);">
+        <div class="formula-title">Decision Boundary</div>
+        <div class="formula-desc">
+          &bull; If <code>Score<sub>sheet</sub> &ge; 0.45</code> AND <code>matches &ge; 3</code> &rArr; <strong style="color:var(--accent-green);">PRIMARY SOV SHEET</strong><br>
+          &bull; Else if <code>Score<sub>sheet</sub> &ge; 0.25</code> OR <code>matches &ge; 1</code> &rArr; <strong style="color:var(--accent-amber);">SECONDARY SCHEDULE</strong><br>
+          &bull; Otherwise &rArr; <strong style="color:var(--accent-red);">REJECT (Skip Tab)</strong>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Section 3: Agent 2 - Schema Mapping -->
+  <section id="agent2-mapping">
+    <h2><span class="badge-agent">Agent 2</span> Schema Mapping & Confidence Calibration</h2>
+
+    <div class="card">
+      <h3>
+        <span>2.1 The 4-Tier Resolution Cascade</span>
+        <span class="complexity-pill">Worst: O(C &times; (K<sub>syn</sub> + D + LLM)) | Avg: O(C)</span>
+      </h3>
+      <p style="font-size: 14px; margin-bottom: 14px;">
+        For each source column $c$, the agent executes a sequential cascade, stopping at the earliest decisive match or combining signals:
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Tier</th>
+            <th>Method</th>
+            <th>Algorithm / Mechanism</th>
+            <th>Latency</th>
+            <th>Base Confidence</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Tier 0</strong></td>
+            <td><strong>Vector Memory</strong></td>
+            <td>ChromaDB exact/cosine recall on prior human approvals</td>
+            <td>&lt; 2 ms</td>
+            <td><code>min(0.99, conf &times; 1.10)</code></td>
+          </tr>
+          <tr>
+            <td><strong>Tier 1</strong></td>
+            <td><strong>Exact Match</strong></td>
+            <td>$O(1)$ Hash table lookup against canonical names & 80+ synonyms</td>
+            <td>&lt; 0.05 ms</td>
+            <td><code>0.97</code></td>
+          </tr>
+          <tr>
+            <td><strong>Tier 2</strong></td>
+            <td><strong>Fuzzy Match</strong></td>
+            <td>RapidFuzz <code>token_sort_ratio</code> with score cutoff &ge; 78</td>
+            <td>~ 0.5 ms</td>
+            <td><code>(score / 100) &times; 0.92</code></td>
+          </tr>
+          <tr>
+            <td><strong>Tier 3</strong></td>
+            <td><strong>Semantic Vector</strong></td>
+            <td>Dense cosine similarity using <code>BAAI/bge-small-en-v1.5</code> (384-d)</td>
+            <td>~ 5 ms</td>
+            <td><code>cosine_sim &times; 0.90</code></td>
+          </tr>
+          <tr>
+            <td><strong>Tier 4</strong></td>
+            <td><strong>LLM Gateway</strong></td>
+            <td>Few-shot structured JSON extraction (Mistral 7B / Llama 3 70B)</td>
+            <td>~ 400&ndash;1800 ms</td>
+            <td><code>llm_conf &times; 0.85</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h3>
+        <span>2.2 Unified Confidence Calibration Formula</span>
+        <span class="complexity-pill">Formula: W<sub>name</sub> + W<sub>value</sub> + W<sub>method</sub></span>
+      </h3>
+      <p style="font-size: 14px;">
+        Unlike naive string matchers, the final confidence integrates both lexical/semantic match strength and statistical value-profile compatibility:
+      </p>
+
+      <div class="formula-box">
+        <div class="formula-title">Multi-Modal Column Confidence Formula</div>
+        <div class="math-display">
+          Confidence = W<sub>name</sub> &times; S<sub>name</sub> + W<sub>value</sub> &times; V<sub>profile</sub> + W<sub>method</sub> &times; A<sub>method</sub>
+        </div>
+        <div class="formula-desc">
+          <strong>Weight Distribution:</strong><br>
+          &bull; <code>W<sub>name</sub> = 0.45</code>: Lexical/Semantic name similarity score.<br>
+          &bull; <code>W<sub>value</sub> = 0.35</code>: Value Profile Fit (VPF) score ($0.0 \dots 1.0$).<br>
+          &bull; <code>W<sub>method</sub> = 0.20</code>: Method agreement factor ($1.0$ if memory/exact hit or fuzzy & semantic agree; $0.8$ if single heuristic matches; $0.6$ on heuristic clash).<br>
+          &bull; <strong>Memory Multiplier:</strong> If retrieved from approved memory: <code>Confidence &larr; min(0.99, Confidence &times; 1.10)</code>.
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>
+        <span>2.3 1:1 Target Uniqueness (Hungarian Conflict Resolution)</span>
+        <span class="complexity-pill">Time: O(T &times; K log K) | Space: O(C)</span>
+      </h3>
+      <p style="font-size: 14px; margin-bottom: 12px;">
+        Insurance underwriting schemas forbid multiple source columns from populating the same target field (e.g. if a broker has "Building Value" and "TIV Building", both cannot map to <code>Building Value</code>).
+      </p>
+      
+      <div class="formula-box" style="border-left-color: var(--accent-purple);">
+        <div class="formula-title">Assignment Heuristic</div>
+        <div class="formula-desc">
+          For each target field $T \in \text{TARGET\_FIELDS}$:
+          <ol style="margin-left: 20px; margin-top: 6px;">
+            <li>Find all source columns $\{C_1, C_2, \dots, C_k\}$ assigned to $T$.</li>
+            <li>If $k > 1$: Sort candidates in descending order of calibrated confidence.</li>
+            <li>Assign $T$ to $C^* = \arg\max_i \text{Confidence}(C_i \to T)$.</li>
+            <li>Demote all competing columns $C_{j \ne *}$ to <code>UNRESOLVED</code> with <code>confidence = 0.0</code> and note the demotion reason in the audit trail.</li>
+          </ol>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Section 4: Value Profile Fit Matrix -->
+  <section id="vpf-matrix">
+    <h2><span class="badge-agent">Deep Dive</span> Value Profile Fit (VPF) Scoring Matrix</h2>
+
+    <div class="card">
+      <p style="font-size: 14px; margin-bottom: 14px;">
+        To prevent absurd false positives (e.g., mapping a column named "State" containing large numbers $50,000,000 to the geographic field <code>State</code>), the profiler analyzes actual cell values against target field expectation profiles.
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Canonical Field</th>
+            <th>Primary Value Indicators</th>
+            <th>Score Formulation Logic</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>Building Value</code>, <code>Contents</code>, <code>BI</code></td>
+            <td>Numeric, currency symbols (<code>$</code>, <code>,</code>), values &ge; 1,000</td>
+            <td><code>0.5 &times; monetary_ratio + 0.3 &times; numeric_ratio + 0.2 &times; (mean &ge; 1000)</code><br>Heavy penalty if negative values or text ratio &gt; 20%.</td>
+          </tr>
+          <tr>
+            <td><code>Year Built</code></td>
+            <td>4-digit integers between 1700 and current year</td>
+            <td><code>year_ratio &times; 0.90 + 0.10</code> if strictly integers in range. <code>0.0</code> if text strings.</td>
+          </tr>
+          <tr>
+            <td><code>Zip</code></td>
+            <td>5-digit integers, ZIP+4 patterns, string length 5</td>
+            <td><code>zip_ratio &times; 0.90 + 0.10</code> if &ge;80% 5-digit digits.</td>
+          </tr>
+          <tr>
+            <td><code>State</code></td>
+            <td>2-letter uppercase codes matching 50 US states</td>
+            <td><code>state_ratio &times; 0.95</code>. High penalty if mean string length &gt; 15.</td>
+          </tr>
+          <tr>
+            <td><code>Fire Sprinklers (Y/N)</code></td>
+            <td>Values in <code>{"Y", "N", "YES", "NO", "Y13", "1", "0"}</code></td>
+            <td><code>0.7 &times; sprinkler_ratio + 0.3 &times; yn_ratio</code>.</td>
+          </tr>
+          <tr>
+            <td><code>Storeys</code>, <code>Number of Buildings</code></td>
+            <td>Small positive integers (1 to 150)</td>
+            <td><code>0.6 &times; storey_ratio + 0.4 &times; (max &le; 150 & all_integers)</code>.</td>
+          </tr>
+          <tr>
+            <td><code>Reference</code></td>
+            <td>High cardinality, unique row identifier</td>
+            <td><code>unique_ratio &times; 0.85</code> (near 1.0 uniqueness).</td>
+          </tr>
+          <tr>
+            <td><code>Address</code></td>
+            <td>Mixed digits and street keywords (St, Ave, Blvd, Rd)</td>
+            <td><code>address_ratio &times; 0.90</code>.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- Section 5: Agent 3 - Quality Reasoning -->
+  <section id="agent3-quality">
+    <h2><span class="badge-agent">Agent 3</span> Data Quality Rules & Composite Index</h2>
+
+    <div class="card">
+      <h3>
+        <span>3.1 Deterministic Anomaly Detection</span>
+        <span class="complexity-pill">Time: O(R &times; F) | Space: O(F)</span>
+      </h3>
+      <p style="font-size: 14px; margin-bottom: 12px;">
+        Agent 3 evaluates 10 strict data quality checks over the mapped dataset:
+      </p>
+
+      <div class="grid-2">
+        <div style="background:var(--bg); padding:14px; border-radius:8px; border:1px solid var(--border);">
+          <strong style="font-size:13px; color:var(--text-dark);">1. Completeness Checks:</strong>
+          <p style="font-size:12.5px; color:var(--text-muted); margin-top:4px;">
+            Computes null percentage for each target field. Triggers <code>HIGH</code> severity if null rate &gt;50%, <code>MEDIUM</code> if &gt;20%, <code>LOW</code> if &gt;5%.
+          </p>
+        </div>
+        <div style="background:var(--bg); padding:14px; border-radius:8px; border:1px solid var(--border);">
+          <strong style="font-size:13px; color:var(--text-dark);">2. Monetary Validations:</strong>
+          <p style="font-size:12.5px; color:var(--text-muted); margin-top:4px;">
+            Detects unparsed currency signs (<code>$</code>, <code>,</code>) &rarr; suggests <code>strip_currency</code>. Detects negative monetary exposures &rarr; flags <code>HIGH</code> risk.
+          </p>
+        </div>
+        <div style="background:var(--bg); padding:14px; border-radius:8px; border:1px solid var(--border);">
+          <strong style="font-size:13px; color:var(--text-dark);">3. Temporal & Physical Limits:</strong>
+          <p style="font-size:12.5px; color:var(--text-muted); margin-top:4px;">
+            Year Built outside [1700, Current Year] &rarr; suggests <code>to_year_int</code>. Storey counts &lt; 1 or Building counts &lt; 1 &rarr; flags logical error.
+          </p>
+        </div>
+        <div style="background:var(--bg); padding:14px; border-radius:8px; border:1px solid var(--border);">
+          <strong style="font-size:13px; color:var(--text-dark);">4. Standard Codes & Geographic Integrity:</strong>
+          <p style="font-size:12.5px; color:var(--text-muted); margin-top:4px;">
+            Non-standard sprinkler codes &rarr; suggests <code>normalize_sprinkler_code</code>. Full state names &rarr; suggests <code>state_to_abbrev</code>. 9-digit or malformed ZIPs &rarr; suggests <code>to_zip</code>.
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>
+        <span>3.2 The SOV Data Quality Index Formula</span>
+        <span class="complexity-pill">Range: 0.0 &ndash; 100.0</span>
+      </h3>
+      <p style="font-size: 14px;">
+        The system outputs an underwriting confidence score summarizing the global integrity of the submission:
+      </p>
+
+      <div class="formula-box">
+        <div class="formula-title">Aggregated Quality Score Formula</div>
+        <div class="math-display">
+          QualityScore = 100 &times; [ 0.35 &times; Q<sub>mapping</sub> + 0.30 &times; Q<sub>completeness</sub> + 0.35 &times; Q<sub>anomalies</sub> ]
+        </div>
+        <div class="formula-desc">
+          <strong>Component Breakdown:</strong><br>
+          &bull; <code>Q<sub>mapping</sub> = (&sum;<sub>m &isin; mapped</sub> Confidence(m)) / 17</code>: Ratio of successfully matched schema dimensions.<br>
+          &bull; <code>Q<sub>completeness</sub> = (&sum;<sub>f &isin; fields</sub> NonNullRate(f)) / (17 &times; 100)</code>: Aggregate matrix fill density.<br>
+          &bull; <code>Q<sub>anomalies</sub> = max(0.0, 1.0 - &sum;<sub>i &isin; issues</sub> w(i))</code>: Penalty reduction where:<br>
+          &nbsp;&nbsp;&ndash; <code>w(High) = 0.15</code> per critical anomaly (e.g. duplicate IDs, negative values)<br>
+          &nbsp;&nbsp;&ndash; <code>w(Medium) = 0.05</code> per format/code issue (e.g. unstripped currency)<br>
+          &nbsp;&nbsp;&ndash; <code>w(Low) = 0.02</code> per minor type mismatch
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Section 6: Agent 4 - Controlled Transformation -->
+  <section id="agent4-transform">
+    <h2><span class="badge-agent">Agent 4</span> Controlled Transformation Sandbox</h2>
+
+    <div class="card">
+      <h3>
+        <span>4.1 The Zero-Hallucination Mutex Execution Engine</span>
+        <span class="complexity-pill">Time: O(R &times; A) | Space: O(R &times; C)</span>
+      </h3>
+      <p style="font-size: 14px; margin-bottom: 12px;">
+        Agent 4 executes <strong>only after human approval</strong>. To eliminate generative hallucinations, transformations operate within a sandboxed functional registry:
+      </p>
+
+      <pre><code># The Transformation Sandbox Execution Pipeline
+def apply_approved_transformations(df: pd.DataFrame, approved_recs: List[Recommendation]):
+    for rec in approved_recs:
+        if rec.status != RecommendationStatus.APPROVED:
+            continue
+        
+        # Security invariant: Refuse unlisted functions
+        if rec.operation not in WHITELISTED_OPERATIONS:
+            raise SecurityException(f"Illegal operation '{rec.operation}' rejected.")
+            
+        target_series = df[rec.target_column]
+        before_snapshot = target_series.copy()
+        
+        # Execute pure deterministic vector transformation
+        df[rec.target_column] = apply_transformation_to_series(rec.operation, target_series)
+        
+        # Measure row-level mutation mask & compile audit entry
+        diff_mask = (df[rec.target_column] != before_snapshot) & target_series.notna()
+        record_audit_log(rec, rows_modified=int(diff_mask.sum()))</code></pre>
+    </div>
+
+    <div class="card">
+      <h3>
+        <span>4.2 DataFrame Disambiguation & Collision Resolution</span>
+        <span class="complexity-pill">Time: O(C<sub>dup</sub> &times; R) | Space: O(1)</span>
+      </h3>
+      <p style="font-size: 14px;">
+        Real-world SOVs often have duplicated column headers (e.g., 3 separate columns all labeled <code>2024 - Increase 10%</code>). Slicing <code>df[col]</code> yields a multi-column DataFrame rather than a Series, crashing subsequent operations.
+      </p>
+
+      <div class="formula-box" style="border-left-color: var(--accent-amber);">
+        <div class="formula-title">Collision Resolution Algorithm</div>
+        <div class="formula-desc">
+          1. <strong>Header Deduplication:</strong> During initial extraction, headers are scanned. If header $H$ exists $k$ times, suffix indices $H, H\_1, H\_2, \dots$ are assigned.<br>
+          2. <strong>Series Slicing Disambiguation:</strong> If <code>isinstance(df[col], pd.DataFrame)</code> occurs at runtime, the agent evaluates <code>notna().sum()</code> across all candidate column slices, retains the slice with maximum non-null data volume, and drops redundant empty duplicates.<br>
+          3. <strong>Target Renaming Protection:</strong> If a source column is renamed to target $T$ while an existing column is already named $T$, the existing column is proactively isolated to <code>_orig_{T}</code>.
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Section 7: Agent 5 - Validation & Export -->
+  <section id="agent5-validation">
+    <h2><span class="badge-agent">Agent 5</span> Validation & Export Engine</h2>
+
+    <div class="card">
+      <h3>
+        <span>5.1 Pandera Contract Enforcement</span>
+        <span class="complexity-pill">Time: O(R &times; 17) | Space: O(1)</span>
+      </h3>
+      <p style="font-size: 14px; margin-bottom: 12px;">
+        Before any file is written to disk, the DataFrame must pass strict validation against the Pandera 17-column specification:
+      </p>
+
+      <ol class="algo-steps">
+        <li><strong>Cardinality Check:</strong> <code>len(df.columns) == 17</code> (Strict equality).</li>
+        <li><strong>Ordered Key Alignment:</strong> Columns must strictly equal:
+          <br><code>["Reference", "Address", "City", "State", "Zip", "County", "Country", "Building Value", "Contents", "BI", "Occupancy", "Construction", "Storeys", "Number of Buildings", "Year Built", "Fire Sprinklers (Y/N)", "Other"]</code>.
+        </li>
+        <li><strong>Null Padding:</strong> Any unmapped canonical column is initialized as an empty series with dtype object (represented as clean Excel blanks).</li>
+        <li><strong>Pruning:</strong> Excess raw columns not approved for inclusion are safely dropped.</li>
+        <li><strong>Pandera Lazy Validation:</strong> <code>DataFrameSchema(columns={col: Column(nullable=True, required=True)}, strict=True, ordered=True).validate(df, lazy=True)</code>.</li>
+      </ol>
+    </div>
+  </section>
+
+  <!-- Section 8: Consolidated Complexity Analysis -->
+  <section id="complexity-matrix">
+    <h2>8. Comprehensive Asymptotic Complexity Matrix</h2>
+
+    <div class="card">
+      <p style="font-size: 14px; margin-bottom: 14px;">
+        Summary of computational costs across the entire multi-agent system. Let $R$ = total rows, $C$ = total raw columns, $S$ = number of sheets in workbook, $K$ = max header scan depth ($K=30$), $D$ = embedding dimensions ($D=384$), and $T$ = canonical target fields ($T=17$).
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Pipeline Step</th>
+            <th>Best Case Time</th>
+            <th>Average Case Time</th>
+            <th>Worst Case Time</th>
+            <th>Space Complexity</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>OpenPyXL Unmerging</strong></td>
+            <td>$O(R \times C)$</td>
+            <td>$O(R \times C)$</td>
+            <td>$O(R \times C + M)$</td>
+            <td>$O(R \times C)$</td>
+          </tr>
+          <tr>
+            <td><strong>Header Detection</strong></td>
+            <td>$O(C)$</td>
+            <td>$O(K \times C)$</td>
+            <td>$O(K \times C)$</td>
+            <td>$O(C)$</td>
+          </tr>
+          <tr>
+            <td><strong>Sheet Scoring</strong></td>
+            <td>$O(S \times C)$</td>
+            <td>$O(S \times (K \cdot C + 200 \cdot C))$</td>
+            <td>$O(S \times R \cdot C)$</td>
+            <td>$O(S)$</td>
+          </tr>
+          <tr>
+            <td><strong>Exact Schema Lookup</strong></td>
+            <td>$O(C)$</td>
+            <td>$O(C)$</td>
+            <td>$O(C)$</td>
+            <td>$O(K_{\text{synonyms}})$</td>
+          </tr>
+          <tr>
+            <td><strong>RapidFuzz Matching</strong></td>
+            <td>$O(C)$</td>
+            <td>$O(C \times K_{\text{corpus}} \cdot L)$</td>
+            <td>$O(C \times K_{\text{corpus}} \cdot L^2)$</td>
+            <td>$O(K_{\text{corpus}})$</td>
+          </tr>
+          <tr>
+            <td><strong>Dense Vector Embedding</strong></td>
+            <td>$O(1)$ <span class="badge-pill badge-green">Cached</span></td>
+            <td>$O(C \times D)$</td>
+            <td>$O(C \times D \cdot K_{\text{corpus}})$</td>
+            <td>$O(K_{\text{corpus}} \times D)$</td>
+          </tr>
+          <tr>
+            <td><strong>LLM Inference (Ambiguous)</strong></td>
+            <td>$O(1)$ <span class="badge-pill badge-green">Skipped</span></td>
+            <td>$O(C_{\text{unresolved}} \times \tau_{\text{LLM}})$</td>
+            <td>$O(C \times \tau_{\text{LLM}})$</td>
+            <td>$O(\text{Tokens})$</td>
+          </tr>
+          <tr>
+            <td><strong>Hungarian Assignment</strong></td>
+            <td>$O(C)$</td>
+            <td>$O(T \cdot k \log k)$</td>
+            <td>$O(C \log C)$</td>
+            <td>$O(C)$</td>
+          </tr>
+          <tr>
+            <td><strong>Deterministic Quality Rules</strong></td>
+            <td>$O(R \times 17)$</td>
+            <td>$O(R \times 17)$</td>
+            <td>$O(R \times 17)$</td>
+            <td>$O(N_{\text{issues}})$</td>
+          </tr>
+          <tr>
+            <td><strong>Whitelisted Transformation</strong></td>
+            <td>$O(R \times A)$</td>
+            <td>$O(R \times A)$</td>
+            <td>$O(R \times A)$</td>
+            <td>$O(R \times C)$</td>
+          </tr>
+          <tr>
+            <td><strong>Pandera Schema Validation</strong></td>
+            <td>$O(R \times 17)$</td>
+            <td>$O(R \times 17)$</td>
+            <td>$O(R \times 17)$</td>
+            <td>$O(1)$</td>
+          </tr>
+          <tr>
+            <td><strong>Excel File Serialization</strong></td>
+            <td>$O(R \times 17)$</td>
+            <td>$O(R \times 17)$</td>
+            <td>$O(R \times 17)$</td>
+            <td>$O(R \times 17)$</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <footer>
+    Agentic SOV Intelligence System &bull; Mathematical & Algorithmic Whitepaper &bull; Designed for Enterprise Underwriting Automation
+  </footer>
+
+</div>
+
+</body>
+</html>
