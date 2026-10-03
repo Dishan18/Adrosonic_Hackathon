@@ -232,7 +232,47 @@ div.stButton > button[kind="primary"]:hover {
     border-color: #0077ED !important;
 }
 
-/* 10. Apple Segmented Control Tabs */
+/* 10. Apple Segmented Control Tabs & Navigation */
+div[data-testid="stSegmentedControl"] {
+    background: #E5E7EB !important;
+    border: 1px solid #D1D5DB !important;
+    border-radius: 8px !important;
+    padding: 3px !important;
+    gap: 3px !important;
+    margin-bottom: 20px !important;
+    display: flex !important;
+    width: 100% !important;
+}
+div[data-testid="stSegmentedControl"] [data-baseweb="button-group"] {
+    display: flex !important;
+    width: 100% !important;
+    gap: 3px !important;
+}
+div[data-testid="stSegmentedControl"] button {
+    flex: 1 !important;
+    border-radius: 6px !important;
+    padding: 6px 14px !important;
+    font-size: 13px !important;
+    font-weight: 500 !important;
+    color: #4B5563 !important;
+    border: none !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    transition: all 0.1s ease !important;
+    text-align: center !important;
+}
+div[data-testid="stSegmentedControl"] button:hover {
+    color: #111827 !important;
+    background: rgba(255, 255, 255, 0.4) !important;
+}
+div[data-testid="stSegmentedControl"] button[aria-checked="true"],
+div[data-testid="stSegmentedControl"] button[data-checked="true"] {
+    background: #FFFFFF !important;
+    color: #111827 !important;
+    font-weight: 600 !important;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08) !important;
+}
+
 .stTabs [data-baseweb="tab-list"] {
     background: #E5E7EB !important;
     border: 1px solid #D1D5DB !important;
@@ -296,6 +336,8 @@ def init_session():
         st.session_state.review_complete = False
     if "transformed" not in st.session_state:
         st.session_state.transformed = False
+    if "nav_tab" not in st.session_state:
+        st.session_state.nav_tab = "Review"
 
 
 # ---------------------------------------------------------------------------
@@ -471,9 +513,13 @@ def render_upload_section():
 
     with col_btn:
         if uploaded is not None:
-            if st.button("Run Pipeline", type="primary", key="btn_run_pipeline"):
-                with st.spinner("Processing workbook through agent cascade…"):
+            btn_box = st.empty()
+            if btn_box.button("Run Pipeline", type="primary", key="btn_run_pipeline"):
+                btn_box.button("Running Pipeline...", disabled=True, key="btn_run_pipeline_running")
+                with st.spinner("Processing workbook through agent cascade..."):
                     _run_pipeline(uploaded)
+                st.session_state.target_nav_tab = "Review"
+                st.rerun()
         else:
             st.button("Run Pipeline", disabled=True, key="btn_run_pipeline_disabled")
 
@@ -569,31 +615,64 @@ def render_review_section(state: SOVState):
 
     st.markdown("<div style='height: 14px;'></div>", unsafe_allow_html=True)
 
-    # Bulk actions & Lock alert
-    col_actions, col_status = st.columns([1, 1])
+    # Action Bar: Approval & Transformation Controls
+    col_actions, col_apply = st.columns([1, 1])
+
+    high_conf_pending = [r for r in pending if r.confidence >= config.HIGH_CONFIDENCE_THRESHOLD]
 
     with col_actions:
-        high_conf_pending = [r for r in pending if r.confidence >= config.HIGH_CONFIDENCE_THRESHOLD]
         if high_conf_pending:
-            if st.button(f"Approve All High-Confidence ({len(high_conf_pending)} items ≥90%)", key="approve_high_btn"):
+            btn_h_box = st.empty()
+            if btn_h_box.button(f"Approve All High-Confidence ({len(high_conf_pending)} items >=90%)", key="approve_high_btn"):
+                btn_h_box.button("Approving High-Confidence...", disabled=True, key="appr_high_busy")
                 for r in high_conf_pending:
                     _approve_recommendation(state, r.id)
+                st.session_state.sov_state = state
+                st.rerun()
+        else:
+            if pending:
+                btn_rem_box = st.empty()
+                if btn_rem_box.button(f"Approve All Remaining ({len(pending)} items)", key="approve_remaining_btn"):
+                    btn_rem_box.button("Approving Remaining...", disabled=True, key="appr_rem_busy")
+                    for r in pending:
+                        _approve_recommendation(state, r.id)
+                    st.session_state.sov_state = state
+                    st.rerun()
+            else:
+                st.button(f"All High-Confidence Approved ({len(approved)} Approved)", disabled=True, key="approve_high_locked")
 
-    with col_status:
+    with col_apply:
         if still_pending_required:
-            st.markdown(
-                f"<div style='font-size:13px;color:#B45309;background:#FFFBEB;border:1px solid #FDE68A;padding:8px 12px;border-radius:7px;'>"
-                f"Export locked: {len(still_pending_required)} required decision(s) pending."
-                f"</div>",
-                unsafe_allow_html=True,
+            st.button(
+                f"Apply Approved Transformations ({len(still_pending_required)} Required Pending)",
+                disabled=True,
+                key="btn_apply_disabled_top",
             )
         else:
-            st.markdown(
-                f"<div style='font-size:13px;color:#047857;background:#ECFDF5;border:1px solid #A7F3D0;padding:8px 12px;border-radius:7px;'>"
-                f"All required decisions complete. Ready for transformation."
-                f"</div>",
-                unsafe_allow_html=True,
-            )
+            btn_apply_box = st.empty()
+            if btn_apply_box.button("Apply Approved Transformations", type="primary", key="btn_apply_transformations_top"):
+                btn_apply_box.button("Applying Transformations...", disabled=True, key="btn_apply_active_top")
+                with st.spinner("Applying approved transformations and generating audited deliverables..."):
+                    _run_transformation(state)
+                st.session_state.transformed = True
+                st.session_state.target_nav_tab = "Final Output"
+                st.rerun()
+
+    # Informational status banner
+    if still_pending_required:
+        st.markdown(
+            f"<div style='font-size:13px;color:#B45309;background:#FFFBEB;border:1px solid #FDE68A;padding:8px 12px;border-radius:7px;margin-top:6px;'>"
+            f"Export locked: {len(still_pending_required)} required review decision(s) pending."
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown(
+            f"<div style='font-size:13px;color:#047857;background:#ECFDF5;border:1px solid #A7F3D0;padding:8px 12px;border-radius:7px;margin-top:6px;'>"
+            f"All required decisions complete. Ready for transformation."
+            f"</div>",
+            unsafe_allow_html=True,
+        )
 
     st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
 
@@ -614,11 +693,17 @@ def render_review_section(state: SOVState):
             for rec in group_recs:
                 _render_recommendation_card(state, rec)
 
-    # Apply approved transformations when unlocked
+    # Apply approved transformations also available at bottom when unlocked
     if not still_pending_required:
         st.markdown("<div style='height: 16px;'></div>", unsafe_allow_html=True)
-        if st.button("Apply Approved Transformations", type="primary", key="btn_apply_transformations"):
-            _run_transformation(state)
+        btn_apply_bottom_box = st.empty()
+        if btn_apply_bottom_box.button("Apply Approved Transformations", type="primary", key="btn_apply_transformations_bottom"):
+            btn_apply_bottom_box.button("Applying Transformations...", disabled=True, key="btn_apply_active_bottom")
+            with st.spinner("Applying approved transformations and generating audited deliverables..."):
+                _run_transformation(state)
+            st.session_state.transformed = True
+            st.session_state.target_nav_tab = "Final Output"
+            st.rerun()
 
 
 def _render_recommendation_card(state: SOVState, rec: Recommendation):
@@ -686,14 +771,18 @@ def _render_recommendation_card(state: SOVState, rec: Recommendation):
         with col_appr:
             if st.button("Approve", key=f"app_{rec.id}"):
                 _approve_recommendation(state, rec.id)
+                st.session_state.sov_state = state
+                st.rerun()
 
         with col_rej:
             if st.button("Reject", key=f"rej_{rec.id}"):
                 st.session_state[f"show_reject_{rec.id}"] = not st.session_state.get(f"show_reject_{rec.id}", False)
+                st.rerun()
 
         with col_edit:
             if st.button("Change Target", key=f"edit_{rec.id}"):
                 st.session_state[f"show_edit_{rec.id}"] = not st.session_state.get(f"show_edit_{rec.id}", False)
+                st.rerun()
 
     elif rec.status == RecommendationStatus.APPROVED:
         with col_appr:
@@ -701,11 +790,15 @@ def _render_recommendation_card(state: SOVState, rec: Recommendation):
         with col_rej:
             if st.button("Revert to Pending", key=f"revert_{rec.id}"):
                 _revert_recommendation(state, rec.id)
+                st.session_state.sov_state = state
+                st.rerun()
 
     elif rec.status == RecommendationStatus.REJECTED:
         with col_appr:
             if st.button("Re-Approve", key=f"reapp_{rec.id}"):
                 _approve_recommendation(state, rec.id)
+                st.session_state.sov_state = state
+                st.rerun()
         with col_rej:
             st.markdown(f"<span style='font-size:12px;color:#B91C1C;'>Rejected{': ' + rec.rejection_note if rec.rejection_note else ''}</span>", unsafe_allow_html=True)
 
@@ -718,9 +811,12 @@ def _render_recommendation_card(state: SOVState, rec: Recommendation):
             if st.button("Confirm Reject", key=f"conf_rej_{rec.id}"):
                 _reject_recommendation(state, rec.id, rej_note)
                 st.session_state[f"show_reject_{rec.id}"] = False
+                st.session_state.sov_state = state
+                st.rerun()
         with cr2:
             if st.button("Cancel", key=f"canc_rej_{rec.id}"):
                 st.session_state[f"show_reject_{rec.id}"] = False
+                st.rerun()
 
     # Expandable edit target field
     if st.session_state.get(f"show_edit_{rec.id}"):
@@ -733,9 +829,12 @@ def _render_recommendation_card(state: SOVState, rec: Recommendation):
             if st.button("Save & Approve", key=f"save_edit_{rec.id}"):
                 _edit_and_approve_recommendation(state, rec.id, new_target)
                 st.session_state[f"show_edit_{rec.id}"] = False
+                st.session_state.sov_state = state
+                st.rerun()
         with ce2:
             if st.button("Cancel", key=f"canc_edit_{rec.id}"):
                 st.session_state[f"show_edit_{rec.id}"] = False
+                st.rerun()
 
     st.markdown("</div>", unsafe_allow_html=True)
 
@@ -1169,7 +1268,10 @@ def render_sidebar(state: Optional[SOVState]):
             st.session_state.pipeline_ran = False
             st.session_state.review_complete = False
             st.session_state.transformed = False
+            st.session_state.target_nav_tab = "Review"
+            st.session_state.nav_tab = "Review"
             st.session_state.session_id = uuid.uuid4().hex[:12]
+            st.rerun()
 
 
 # ---------------------------------------------------------------------------
@@ -1178,6 +1280,8 @@ def render_sidebar(state: Optional[SOVState]):
 
 def main():
     st.markdown(APPLE_CSS, unsafe_allow_html=True)
+    if "target_nav_tab" in st.session_state:
+        st.session_state.nav_tab = st.session_state.pop("target_nav_tab")
     init_session()
     state: Optional[SOVState] = st.session_state.sov_state
 
@@ -1197,24 +1301,25 @@ def main():
             "Data Quality",
             "Final Output",
         ]
-        tabs = st.tabs(tab_labels)
+        current_tab = st.segmented_control(
+            "Workflow Navigation",
+            options=tab_labels,
+            key="nav_tab",
+            label_visibility="collapsed",
+        )
+        active = current_tab or st.session_state.get("nav_tab", "Review")
 
-        with tabs[0]:
+        if active == "Review":
             render_review_section(state)
-
-        with tabs[1]:
+        elif active == "Data Preview":
             render_preview_section(state)
-
-        with tabs[2]:
+        elif active == "Schema Mapping":
             render_mapping_section(state)
-
-        with tabs[3]:
+        elif active == "Sheet Detection":
             render_discovery_section(state)
-
-        with tabs[4]:
+        elif active == "Data Quality":
             render_quality_section(state)
-
-        with tabs[5]:
+        elif active == "Final Output":
             render_export_section(state)
 
 
