@@ -1,7 +1,7 @@
 # High-Level Design (HLD)
 ## Agentic Statement of Values (SOV) Intelligence & Cleansing System
 
-**Document Version:** 1.2.0 (updated 2026-10-04; adds unclaimed-column review and pipeline animation)  
+**Document Version:** 1.3.0 (updated 2026-10-04; adds 1-click reject drop, Change Target ChromaDB feedback, and Mapping Accuracy KPI)  
 **Target Environment:** Local workstation or private cloud (Streamlit, LangGraph, Ollama/Groq/Gemini, ChromaDB)  
 **System Classification:** Commercial insurance data transformation engine with human-in-the-loop control  
 
@@ -71,14 +71,14 @@ This system runs **four specialized agents** under a LangGraph state machine (Ag
                                             ▼
 ┌─────────────────────────────────────────────────────────────────────────────────────────┐
 │                         HUMAN-IN-THE-LOOP APPROVAL GATE                                 │
-│  Approve / Reject (with note → re-reasoning) / Change Target; bulk approval ≥ 0.90 only │
-│  Unclaimed Columns: manually assign to any target field (space-merged) or reject (drop)  │
+│  Approve / 1-Click Reject (drops column) / Change Target (ChromaDB feedback); KPI Card  │
+│  Unclaimed Columns: manually assign to any target field (space-merged) or reject (drop) │
 └───────────────────────────────────────────┬─────────────────────────────────────────────┘
                                             │ reviewed state written to checkpoint, resume
                                             ▼
 ┌─────────────────────────────────────────────────────────────────────────────────────────┐
 │                     AGENT 4: CONTROLLED TRANSFORMATION & EXPORT                         │
-│   - Approved renames only (rejected / unreviewed columns never reach the output)        │
+│   - Approved renames only; rejected columns explicitly dropped and audited              │
 │   - Whitelist-only series operations, audited before write-back                         │
 │   - 17-column enforcement, Pandera + numeric type-conformance validation                │
 │   - Cleaned_SOV.xlsx (Zip formatted 00000) + Audit_Log.xlsx                             │

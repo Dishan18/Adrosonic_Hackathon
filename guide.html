@@ -597,8 +597,8 @@
         <li><strong>Deterministic Checks (12):</strong> completeness, currency formatting ($ symbols, commas), negative and non-numeric amounts, Year Built range, storey and building counts, sprinkler codes, state codes (incl. <code>V.I.</code>), duplicate references, ZIP format, non-integer integer fields.</li>
         <li><strong>Quality Scoring:</strong> One 0&ndash;100 score from mapping coverage &times; confidence, completeness and issue severity, shared by the report and the UI.</li>
         <li><strong>LLM Synthesis:</strong> The configured LLM writes human-readable explanations from issue counts and masked examples. It may lower but never raise a confidence, and cannot attach operations to column mappings.</li>
-        <li><strong>HITL Review Requirement:</strong> <code>review_required=True</code> when confidence is &lt; 90% or the issue is high/medium severity; it locks the transformation gate until decided.</li>
-        <li><strong>Re-reasoning &amp; escalation:</strong> rejecting a column mapping with a note makes Agent 3 ask the mapping cascade for the next-best target and re-propose it; if none fits, the item is escalated to a human, who can assign a target. A rejected data fix is withdrawn with an explanation. Every other decision is kept.</li>
+        <li><strong>HITL Review Controls:</strong> Underwriters have full control: <strong>Approve</strong> confirms the mapping; <strong>Reject</strong> executes in 1 click and drops the source column cleanly from output without prompt friction; <strong>Change Target</strong> manually assigns the column to another standard field and persists the decision into ChromaDB vector memory as active human feedback (<code>method="human_feedback"</code>).</li>
+        <li><strong>Mapping Accuracy KPI:</strong> A real-time metric pill is displayed in the top action bar beside the bulk approval button, calculating <code>(predicted_columns_approved / total_columns_predicted) &times; 100</code>.</li>
       </ul>
     </div>
 
@@ -607,13 +607,13 @@
       <p>Executes approved recommendations with mathematical determinism.</p>
       <ul style="margin-left: 20px; font-size: 13.5px; color: var(--text);">
         <li><strong>Deliverables:</strong> <code>Cleaned_SOV.xlsx</code> and <code>Audit_Log.xlsx</code> (exact names) plus timestamped copies; the written file is re-checked for merged cells.</li>
-        <li><strong>Approved Renames Only:</strong> approved column mappings are applied first; a raw column that merely carries a target name (e.g. a rejected <code>State</code>) never reaches the output.</li>
+        <li><strong>Approved Renames &amp; Rejection Drops:</strong> Approved column mappings are applied first. Rejected source columns are explicitly dropped from the output DataFrame and logged as <code>column_rejected_dropped</code>. Raw columns that merely happen to carry a target name never reach the output unless approved.</li>
         <li><strong>Whitelisted Mutations:</strong> Strictly limited to <code>strip_currency</code>, <code>to_float</code>, <code>to_int</code>, <code>to_str</code>, <code>to_year_int</code>, <code>to_zip</code>, <code>state_to_abbrev</code>, <code>normalize_sprinkler_code</code>, <code>trim_whitespace</code>, <code>normalize_spaces</code>, <code>normalize_date</code> and <code>flag_for_review</code> (no change).</li>
         <li><strong>Null Preservation:</strong> Missing/blank values stay empty&mdash;the system never synthesizes property values. Fractions such as 1.5 storeys are kept, not truncated.</li>
         <li><strong>Schema Contract:</strong> Ensures output has exactly the 17 target columns in the canonical order; numeric Zip cells are formatted <code>00000</code>.</li>
         <li><strong>Validation:</strong> Pandera checks column presence and order; a type check reports non-numeric or non-integer values in numeric fields.</li>
         <li><strong>Unclaimed Column Handling:</strong> Unmapped source columns are surfaced in the Review tab. The human reviewer can reject them (dropped from output) or manually assign them to any target field. Multiple columns assigned to the same target field are automatically merged into a single cell separated by a space. All decisions are tracked in <code>Audit_Log.xlsx</code>.</li>
-        <li><strong>Audit Logging:</strong> One entry per rename and per applied operation (sample before/after and rows changed), recorded before the change is written.</li>
+        <li><strong>Audit Logging:</strong> One entry per rename, per applied operation, and per rejected/dropped column, recorded before the change is written.</li>
       </ul>
     </div>
   </section>

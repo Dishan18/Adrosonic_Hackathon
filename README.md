@@ -31,10 +31,10 @@ Upload SOV File
       │
       ▼
 ┌─────────────────────────────────────────┐
-│  Human Review (HITL)                    │  ← Approve / Reject / Change Target
-│  (LangGraph interrupt before            │    Rejection with a note → re-reasoning
-│   human_review, checkpointed)           │    Unclaimed Columns: manually assign
-│                                         │    to any target field or reject (drop)
+│  Human Review (HITL)                    │  ← Approve / 1-Click Reject / Change Target
+│  (LangGraph interrupt before            │    1-Click Reject drops column (audited)
+│   human_review, checkpointed)           │    Change Target stores feedback in ChromaDB
+│                                         │    Live Mapping Accuracy KPI display
 └─────────────────────────────────────────┘
       │
       ▼
@@ -48,7 +48,7 @@ Upload SOV File
  Audit_Log.xlsx (full transformation trail)
 ```
 
-**Re-reasoning and escalation:** A rejection with a note triggers re-reasoning on that item: for a column mapping, Agent 3 asks the mapping cascade for the best alternative target (excluding the rejected one and targets used by other columns) and re-proposes it for review; if none fits, the item is **escalated** to a human, who can assign a target. A rejected data fix is withdrawn and the item says so. Every other decision is kept.
+**Review, rejection & feedback:** Clicking **Reject** on a column mapping immediately drops that column from the output without prompt friction (audited in `Audit_Log.xlsx`). Clicking **Change Target** allows manually assigning the column to another target standard field, storing this human correction into ChromaDB persistent vector memory (`method="human_feedback"`). A real-time **Mapping Accuracy KPI** (`approved_predicted / total_predicted * 100`) is displayed in the top action bar.
 
 **Deliverables:** every run writes `outputs/Cleaned_SOV.xlsx` and `outputs/Audit_Log.xlsx` (the required names; overwritten by the latest run) plus timestamped copies `Cleaned_SOV_<session>_<time>.xlsx` / `Audit_Log_<session>_<time>.xlsx` as history. The UI also offers the column mappings as `Schema_Mapping.json`.
 
@@ -334,3 +334,4 @@ With every recommendation approved, validation still reports real problems in th
 13. ✅ Malformed files fail gracefully
 14. ✅ Export locked until review complete
 15. ✅ Unclaimed source columns are surfaced in the Review tab: each can be manually assigned to a target field (space-merged if shared) or rejected (dropped before export)
+16. ✅ Review tab features 1-click column rejection (dropped from output), Change Target with persistent ChromaDB human feedback, and real-time Mapping Accuracy KPI

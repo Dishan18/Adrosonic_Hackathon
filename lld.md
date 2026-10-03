@@ -1,7 +1,7 @@
 # Low-Level Design (LLD)
 ## Agentic Statement of Values (SOV) Intelligence & Cleansing System
 
-**Document Version:** 1.2.0 (updated 2026-10-04; adds unclaimed-column review and pipeline animation)  
+**Document Version:** 1.3.0 (updated 2026-10-04; adds 1-click reject drop, Change Target ChromaDB feedback, and Mapping Accuracy KPI)  
 **Target Architecture:** LangGraph State Machine, Pydantic V2, Pandera, OpenPyXL, RapidFuzz, Sentence-Transformers, ChromaDB  
 
 ---
@@ -480,4 +480,44 @@ When the **Run Pipeline** button is clicked, `_show_pipeline_animation_and_run()
 3. Clears the placeholder unconditionally in `finally` — so the card disappears whether the pipeline succeeded or failed
 
 No additional threads or async code is introduced; Streamlit's synchronous rendering model is preserved.
+
+---
+
+## 7. Review Actions, Feedback Persistence & Mapping Accuracy KPI
+
+### 7.1 Single-Click Column Rejection & Deterministic Drop
+When a reviewer clicks **Reject** on any column mapping recommendation:
+1. The status transitions immediately to `RecommendationStatus.REJECTED` with zero modal prompts or required feedback notes.
+2. In `app/agents/transformation.py` (`_apply_approved_transformations`), every source column belonging to a rejected column mapping recommendation is explicitly dropped from the DataFrame:
+   ```python
+   for rec in state.recommendations:
+       if rec.action_type == ActionType.COLUMN_MAPPING and rec.status == RecommendationStatus.REJECTED:
+           if rec.source_column in df.columns:
+               df = df.drop(columns=[rec.source_column])
+   ```
+3. An audit record is logged to `Audit_Log.xlsx` with `transformation_applied="column_rejected_dropped"` and `after_value="Dropped (rejected by reviewer)"`, with `recommendation_id=None` so it does not count as an applied transformation.
+
+### 7.2 Change Target & ChromaDB Active Feedback
+When a reviewer uses **Change Target** to manually assign a column to another standard field:
+1. `rec.target_column` is updated to the newly selected target field, with `confidence = 1.0` and status `APPROVED`.
+2. The internal `state.mappings.mappings` entry for that column is kept synchronized.
+3. The human correction is stored into ChromaDB persistent vector memory:
+   ```python
+   store_approved_mapping(
+       source_column=rec.source_column,
+       target_field=new_target,
+       confidence=1.0,
+       method="human_feedback",
+       reviewer_id="human",
+   )
+   ```
+4. On future SOV uploads, Stage 0 Vector Memory recalls this human-verified mapping first.
+
+### 7.3 Real-Time Mapping Accuracy KPI
+The Review tab renders a top action bar metric card beside the bulk approval button:
+$$\text{Mapping Accuracy (\%)} = \frac{\text{predicted\_columns\_approved}}{\text{total\_columns\_predicted}} \times 100$$
+- $\text{total\_columns\_predicted}$: Number of recommendations with `action_type == ActionType.COLUMN_MAPPING`.
+- $\text{predicted\_columns\_approved}$: Count of those recommendations with status `APPROVED`.
+- Dynamically updates as the underwriter approves, rejects, or edits mappings.
+
 
