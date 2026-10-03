@@ -270,6 +270,8 @@ class SOVState(BaseModel):
 
     # --- Human decisions ---
     decisions: List[HumanDecision] = Field(default_factory=list)
+    # Keys = unmapped source column names; values = TARGET_FIELDS name or "__rejected__"
+    unclaimed_decisions: Dict[str, str] = Field(default_factory=dict)
 
     # --- Agent 4 outputs ---
     output_path: Optional[str] = None

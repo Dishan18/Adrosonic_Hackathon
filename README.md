@@ -33,7 +33,8 @@ Upload SOV File
 ┌─────────────────────────────────────────┐
 │  Human Review (HITL)                    │  ← Approve / Reject / Change Target
 │  (LangGraph interrupt before            │    Rejection with a note → re-reasoning
-│   human_review, checkpointed)           │    (all other decisions are kept)
+│   human_review, checkpointed)           │    Unclaimed Columns: manually assign
+│                                         │    to any target field or reject (drop)
 └─────────────────────────────────────────┘
       │
       ▼
@@ -238,6 +239,8 @@ The report is written to `outputs/benchmark_report.json`.
    - Agent 3 re-reasons with that feedback (the fix is withdrawn and the card says why); the other decisions are kept
    - Reject a column mapping with a note: Agent 3 proposes an alternative target or escalates the item to a human (**Assign Target**)
 7. Click **Apply Approved Transformations**
+   - If any source columns were not mapped, scroll down in the Review tab to **Unclaimed Source Columns**
+   - Assign each to a target field (values are space-merged if multiple columns share a target) or click **Reject** to drop the column from the output
 8. **Final Output** tab: schema conformance panel (17 headers in order, types per field, 0 merged cells), cleaned rows, audit trail; download `Cleaned_SOV.xlsx` and `Audit_Log.xlsx`
 9. Verify schema: exactly 17 columns in exact order
 
@@ -330,3 +333,4 @@ With every recommendation approved, validation still reports real problems in th
 12. ✅ No hardcoded API keys
 13. ✅ Malformed files fail gracefully
 14. ✅ Export locked until review complete
+15. ✅ Unclaimed source columns are surfaced in the Review tab: each can be manually assigned to a target field (space-merged if shared) or rejected (dropped before export)

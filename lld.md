@@ -1,7 +1,7 @@
 # Low-Level Design (LLD)
 ## Agentic Statement of Values (SOV) Intelligence & Cleansing System
 
-**Document Version:** 1.1.0 (updated 2026-10-03; definitions match the code in `app/`)  
+**Document Version:** 1.2.0 (updated 2026-10-04; adds unclaimed-column review and pipeline animation)  
 **Target Architecture:** LangGraph State Machine, Pydantic V2, Pandera, OpenPyXL, RapidFuzz, Sentence-Transformers, ChromaDB  
 
 ---
@@ -39,8 +39,11 @@ class SOVState(BaseModel):
     # Agent 3
     quality_report: Optional[QualityReport] = None
     recommendations: List[Recommendation] = []
-    # Human decisions: defined but not populated; review state lives on each Recommendation
+    # Human decisions
     decisions: List[HumanDecision] = []
+    # Human decisions on unclaimed (unmapped) source columns:
+    # keys = source column name, values = TARGET_FIELDS name OR "__rejected__"
+    unclaimed_decisions: Dict[str, str] = {}
     # Agent 4
     output_path: Optional[str] = None
     audit_log_path: Optional[str] = None
@@ -397,3 +400,84 @@ The system is guarded by 92 tests in `tests/test_sov_system.py`; `tests/conftest
 - **Unit Tests:** ingestion, header detection, sheet ranking, exact/fuzzy mapping, confidence, value profiling, anomaly rules, every whitelisted transformation, null preservation, schema validation, masking, LLM-provider gating.
 - **Integration Tests:** end-to-end runs on the synthetic samples; the LangGraph run → pause → reject/re-reason → resume → export cycle; audit logging; malformed input.
 - **Real-file regressions:** synthetic workbooks reproducing defects found in the broker files (merged footnotes, first-come mapping, value-profile veto, multi-sheet merge, rejected same-name columns, zero-stripped ZIPs, flags sharing a field). The four broker files themselves are not part of the automated suite; they are verified manually (see `README.md`, "Verified on Real SOVs").
+
+---
+
+## 5. Unclaimed Columns Feature
+
+### 5.1 Overview
+
+Agent 2 places every source column that could not be matched to a target field in `MappingResult.unmapped_source_columns`. These columns are **never** written to `Cleaned_SOV.xlsx` by default (they are dropped by `enforce_column_order`). The **Unclaimed Columns** review section gives the human reviewer a deterministic way to handle them before transformation.
+
+### 5.2 Review UI (`app/ui/streamlit_app.py` → `render_unclaimed_section`)
+
+Rendered at the **bottom of the Review tab**, below the four standard expanders, only when `state.mappings.unmapped_source_columns` is non-empty. For each unclaimed column the section shows:
+
+- **Column name** in monospace
+- **Sample values** from the raw source DataFrame (up to 4, best-effort)
+- **Visual status badge** — red border = rejected, green = assigned, neutral = no decision
+- **Controls row:** selectbox (17 target fields + blank placeholder) + **Assign** button + **Reject**/**Undo** button
+
+Decisions are stored in `st.session_state["unclaimed_decisions"]` (a `Dict[str, str]`):
+
+| Value | Meaning |
+|-------|---------|
+| `"__rejected__"` | Drop column — never reaches the output |
+| A `TARGET_FIELDS` name | Manually assign to that target field |
+| *(absent)* | No action — column is silently dropped by `enforce_column_order` |
+
+Decisions are flushed into `state.unclaimed_decisions` immediately before `_run_transformation` is called (both Apply button sites). The `unclaimed_decisions` dict is cleared on session reset.
+
+### 5.3 Transformation Logic (`app/agents/transformation.py` → `_apply_approved_transformations`, Step 3)
+
+Runs **after** all approved recommendation transforms, **before** `enforce_column_order`.
+
+**Grouping:** all manual assignments are first grouped by target field. This ensures that two or more source columns assigned to the same target are always space-merged, whether that target was pre-populated by an approved recommendation or was entirely absent.
+
+**Reject path:**
+```
+for src_col in reject_cols:
+    df.drop(columns=[src_col])   # removed; logged to audit trail as "unclaimed_reject"
+```
+
+**Assign path (per target group):**
+```
+if target already in df.columns:
+    # Always merge — target was pre-populated
+    for src_col in src_cols:
+        accumulator = safe_space_concat(df[target], df[src_col])
+        df.drop(src_col)
+    df[target] = accumulator
+
+else:
+    # Target was empty
+    df.rename(src_cols[0] → target)      # first source becomes the base
+    for src_col in src_cols[1:]:         # additional sources: merge in
+        accumulator = safe_space_concat(df[target], df[src_col])
+        df.drop(src_col)
+    df[target] = accumulator
+```
+
+**NaN-safe concatenation (`_merge_series`):**
+- Both non-null → `left + " " + right`
+- Only left non-null → `left`
+- Only right non-null → `right`
+- Both null → null
+
+Every accept/assign operation appends an `AuditEntry` with `transformation_applied = "unclaimed_manual_assign"` or `"unclaimed_reject"`.
+
+---
+
+## 6. Pipeline Animation
+
+When the **Run Pipeline** button is clicked, `_show_pipeline_animation_and_run()` is called. It:
+
+1. Renders a full-width animated card via `st.empty().markdown(...)` with:
+   - A gradient progress bar (`@keyframes bar-slide`, 12-second fill)
+   - Four pulsing agent-step pills (`@keyframes agent-pulse`, staggered delays)
+   - Three bouncing loading dots (`@keyframes dot-bounce`)
+2. Calls `_run_pipeline(uploaded_file)` synchronously inside a `try/finally`
+3. Clears the placeholder unconditionally in `finally` — so the card disappears whether the pipeline succeeded or failed
+
+No additional threads or async code is introduced; Streamlit's synchronous rendering model is preserved.
+

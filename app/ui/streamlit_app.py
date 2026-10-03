@@ -340,6 +340,8 @@ def init_session():
         st.session_state.nav_tab = "Review"
     if "graph_thread_id" not in st.session_state:
         st.session_state.graph_thread_id = None
+    if "unclaimed_decisions" not in st.session_state:
+        st.session_state.unclaimed_decisions = {}
 
 
 # ---------------------------------------------------------------------------
@@ -517,13 +519,145 @@ def render_upload_section():
         if uploaded is not None:
             btn_box = st.empty()
             if btn_box.button("Run Pipeline", type="primary", key="btn_run_pipeline"):
-                btn_box.button("Running Pipeline...", disabled=True, key="btn_run_pipeline_running")
-                with st.spinner("Processing workbook through agent cascade..."):
-                    _run_pipeline(uploaded)
+                btn_box.empty()
+                _show_pipeline_animation_and_run(uploaded)
                 st.session_state.target_nav_tab = "Review"
                 st.rerun()
         else:
             st.button("Run Pipeline", disabled=True, key="btn_run_pipeline_disabled")
+
+
+_PIPELINE_ANIM_CSS = """
+<style>
+@keyframes agent-pulse {
+    0%   { opacity: 0.35; transform: scale(0.97); }
+    50%  { opacity: 1;    transform: scale(1.01); }
+    100% { opacity: 0.35; transform: scale(0.97); }
+}
+@keyframes dot-bounce {
+    0%, 80%, 100% { transform: translateY(0);   opacity: 0.4; }
+    40%            { transform: translateY(-6px); opacity: 1;   }
+}
+@keyframes bar-slide {
+    0%   { width: 0%;   }
+    100% { width: 100%; }
+}
+.pipeline-overlay {
+    background: #FFFFFF;
+    border: 1px solid #E5E7EB;
+    border-radius: 14px;
+    padding: 28px 32px 24px;
+    margin: 18px 0 12px;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.07);
+    text-align: center;
+}
+.pipeline-title {
+    font-size: 16px;
+    font-weight: 600;
+    color: #111827;
+    margin-bottom: 4px;
+    letter-spacing: -0.01em;
+}
+.pipeline-sub {
+    font-size: 13px;
+    color: #6B7280;
+    margin-bottom: 22px;
+}
+.pipeline-bar-track {
+    width: 100%;
+    height: 4px;
+    background: #F3F4F6;
+    border-radius: 2px;
+    overflow: hidden;
+    margin-bottom: 24px;
+}
+.pipeline-bar-fill {
+    height: 4px;
+    background: linear-gradient(90deg, #0071E3 0%, #34D399 100%);
+    border-radius: 2px;
+    animation: bar-slide 12s ease-in-out forwards;
+}
+.pipeline-steps {
+    display: flex;
+    justify-content: center;
+    gap: 14px;
+    flex-wrap: wrap;
+}
+.pipeline-step {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    background: #F9FAFB;
+    border: 1px solid #E5E7EB;
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-size: 12px;
+    font-weight: 500;
+    color: #4B5563;
+    animation: agent-pulse 2.2s ease-in-out infinite;
+}
+.pipeline-step:nth-child(1) { animation-delay: 0.0s; }
+.pipeline-step:nth-child(2) { animation-delay: 0.5s; }
+.pipeline-step:nth-child(3) { animation-delay: 1.0s; }
+.pipeline-step:nth-child(4) { animation-delay: 1.5s; }
+.pipeline-step-dot {
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: #0071E3;
+    flex-shrink: 0;
+}
+.pipeline-dots {
+    display: flex;
+    justify-content: center;
+    gap: 6px;
+    margin-top: 20px;
+}
+.pipeline-dots span {
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: #0071E3;
+    display: inline-block;
+    animation: dot-bounce 1.4s ease-in-out infinite;
+}
+.pipeline-dots span:nth-child(2) { animation-delay: 0.2s; }
+.pipeline-dots span:nth-child(3) { animation-delay: 0.4s; }
+</style>
+"""
+
+_PIPELINE_ANIM_HTML = """
+<div class="pipeline-overlay">
+    <div class="pipeline-title">Agents Working on Your Data</div>
+    <div class="pipeline-sub">Running multi-stage intelligence cascade — this usually takes 10–30 seconds</div>
+    <div class="pipeline-bar-track"><div class="pipeline-bar-fill"></div></div>
+    <div class="pipeline-steps">
+        <div class="pipeline-step">
+            <div class="pipeline-step-dot"></div>Agent 1 · Sheet Discovery
+        </div>
+        <div class="pipeline-step">
+            <div class="pipeline-step-dot" style="background:#8B5CF6;"></div>Agent 2 · Schema Mapping
+        </div>
+        <div class="pipeline-step">
+            <div class="pipeline-step-dot" style="background:#F59E0B;"></div>Agent 3 · Quality Assessment
+        </div>
+        <div class="pipeline-step">
+            <div class="pipeline-step-dot" style="background:#10B981;"></div>Human Review Ready
+        </div>
+    </div>
+    <div class="pipeline-dots">
+        <span></span><span></span><span></span>
+    </div>
+</div>
+"""
+
+
+def _show_pipeline_animation_and_run(uploaded_file):
+    """Show animated agent progress card, run the pipeline, then clear the card."""
+    anim_slot = st.empty()
+    anim_slot.markdown(_PIPELINE_ANIM_CSS + _PIPELINE_ANIM_HTML, unsafe_allow_html=True)
+    try:
+        _run_pipeline(uploaded_file)
+    finally:
+        anim_slot.empty()
 
 
 def _run_pipeline(uploaded_file):
@@ -662,6 +796,7 @@ def render_review_section(state: SOVState):
             if btn_apply_box.button("Apply Approved Transformations", type="primary", key="btn_apply_transformations_top"):
                 btn_apply_box.button("Applying Transformations...", disabled=True, key="btn_apply_active_top")
                 with st.spinner("Applying approved transformations and generating audited deliverables..."):
+                    state.unclaimed_decisions = st.session_state.get("unclaimed_decisions", {})
                     _run_transformation(state)
                 st.session_state.transformed = True
                 st.session_state.target_nav_tab = "Final Output"
@@ -709,10 +844,14 @@ def render_review_section(state: SOVState):
         if btn_apply_bottom_box.button("Apply Approved Transformations", type="primary", key="btn_apply_transformations_bottom"):
             btn_apply_bottom_box.button("Applying Transformations...", disabled=True, key="btn_apply_active_bottom")
             with st.spinner("Applying approved transformations and generating audited deliverables..."):
+                state.unclaimed_decisions = st.session_state.get("unclaimed_decisions", {})
                 _run_transformation(state)
             st.session_state.transformed = True
             st.session_state.target_nav_tab = "Final Output"
             st.rerun()
+
+    # Unclaimed columns section — rendered below everything else in the Review tab
+    render_unclaimed_section(state)
 
 
 def _render_recommendation_card(state: SOVState, rec: Recommendation):
@@ -950,6 +1089,116 @@ def _run_rereason(state: SOVState):
         st.session_state.sov_state = state
     except Exception as e:
         st.error(f"Re-reasoning failed: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Unclaimed Columns Section
+# ---------------------------------------------------------------------------
+
+def render_unclaimed_section(state: SOVState):
+    """Render the 'Unclaimed Source Columns' section at the bottom of the Review tab."""
+    if state.mappings is None:
+        return
+
+    unclaimed_cols = state.mappings.unmapped_source_columns
+    if not unclaimed_cols:
+        return
+
+    from app.agents.transformation import _load_source_df
+
+    st.markdown("<div style='height: 20px;'></div>", unsafe_allow_html=True)
+
+    with st.expander(f"Unclaimed Source Columns ({len(unclaimed_cols)})", expanded=False):
+        st.markdown(
+            "<div style='font-size:13px;color:#6B7280;margin-bottom:12px;'>"
+            "These source columns were not mapped to any of the 17 standard fields by the agents. "
+            "Manually assign each column to a target field, or reject it to exclude it from the output."
+            "</div>",
+            unsafe_allow_html=True,
+        )
+
+        # Load a sample of source data for preview (best-effort)
+        source_df = None
+        try:
+            source_df = _load_source_df(state)
+        except Exception:
+            pass
+
+        decisions: Dict[str, str] = st.session_state.get("unclaimed_decisions", {})
+
+        for col in unclaimed_cols:
+            current = decisions.get(col, "")
+
+            # Determine card border color based on current decision
+            if current == "__rejected__":
+                border_color = "#FECACA"  # red
+                status_label = "<span style='color:#B91C1C;font-size:11px;font-weight:600;'>REJECTED</span>"
+            elif current:
+                border_color = "#A7F3D0"  # green
+                status_label = f"<span style='color:#047857;font-size:11px;font-weight:600;'>ASSIGNED → {current}</span>"
+            else:
+                border_color = "#E5E7EB"  # neutral
+                status_label = "<span style='color:#6B7280;font-size:11px;'>No action</span>"
+
+            st.markdown(
+                f"""
+                <div style="background:#FFFFFF;border:1px solid {border_color};border-radius:10px;
+                            padding:14px 16px;margin-bottom:10px;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+                        <strong style="font-size:14px;color:#111827;font-family:monospace;">{col}</strong>
+                        {status_label}
+                    </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+            # Sample values preview
+            if source_df is not None and col in source_df.columns:
+                samples = source_df[col].dropna().astype(str).head(4).tolist()
+                if samples:
+                    sample_str = " · ".join(f"<code>{s[:30]}</code>" for s in samples)
+                    st.markdown(
+                        f"<div style='font-size:12px;color:#6B7280;margin-bottom:10px;'>"
+                        f"Sample values: {sample_str}"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+
+            st.markdown("</div>", unsafe_allow_html=True)
+
+            # Controls row
+            col_sel, col_assign_btn, col_rej_btn, _ = st.columns([3, 1, 1, 2])
+
+            with col_sel:
+                # Build options: blank placeholder + all 17 target fields
+                options = [""] + list(TARGET_FIELDS)
+                current_idx = options.index(current) if current in options else 0
+                chosen = st.selectbox(
+                    "Assign to",
+                    options=options,
+                    index=current_idx,
+                    key=f"uncl_sel_{col}",
+                    label_visibility="collapsed",
+                    format_func=lambda x: "— Select target field —" if x == "" else x,
+                )
+
+            with col_assign_btn:
+                if st.button("Assign", key=f"uncl_assign_{col}", disabled=(not chosen)):
+                    decisions[col] = chosen
+                    st.session_state.unclaimed_decisions = decisions
+                    st.rerun()
+
+            with col_rej_btn:
+                if current == "__rejected__":
+                    if st.button("Undo", key=f"uncl_undo_{col}"):
+                        decisions.pop(col, None)
+                        st.session_state.unclaimed_decisions = decisions
+                        st.rerun()
+                else:
+                    if st.button("Reject", key=f"uncl_rej_{col}"):
+                        decisions[col] = "__rejected__"
+                        st.session_state.unclaimed_decisions = decisions
+                        st.rerun()
 
 
 def _run_transformation(state: SOVState):
@@ -1438,6 +1687,7 @@ def render_sidebar(state: Optional[SOVState]):
             st.session_state.pipeline_ran = False
             st.session_state.review_complete = False
             st.session_state.transformed = False
+            st.session_state.unclaimed_decisions = {}
             st.session_state.target_nav_tab = "Review"
             st.session_state.nav_tab = "Review"
             st.session_state.session_id = uuid.uuid4().hex[:12]

@@ -47,6 +47,7 @@ outputs/*.json
 # ChromaDB & DBs
 chroma_db/
 chroma_db_backup_*/
+chroma_demo/
 checkpoints.sqlite
 *.sqlite
 *.db

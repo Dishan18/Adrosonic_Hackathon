@@ -1,7 +1,7 @@
 # High-Level Design (HLD)
 ## Agentic Statement of Values (SOV) Intelligence & Cleansing System
 
-**Document Version:** 1.1.0 (updated 2026-10-03 after the real-file audit)  
+**Document Version:** 1.2.0 (updated 2026-10-04; adds unclaimed-column review and pipeline animation)  
 **Target Environment:** Local workstation or private cloud (Streamlit, LangGraph, Ollama/Groq/Gemini, ChromaDB)  
 **System Classification:** Commercial insurance data transformation engine with human-in-the-loop control  
 
@@ -72,6 +72,7 @@ This system runs **four specialized agents** under a LangGraph state machine (Ag
 ┌─────────────────────────────────────────────────────────────────────────────────────────┐
 │                         HUMAN-IN-THE-LOOP APPROVAL GATE                                 │
 │  Approve / Reject (with note → re-reasoning) / Change Target; bulk approval ≥ 0.90 only │
+│  Unclaimed Columns: manually assign to any target field (space-merged) or reject (drop)  │
 └───────────────────────────────────────────┬─────────────────────────────────────────────┘
                                             │ reviewed state written to checkpoint, resume
                                             ▼
@@ -139,6 +140,9 @@ Raw Workbook (.xlsx / .csv)
         `normalize_spaces`, `normalize_date`; `flag_for_review` changes nothing).
         Writes one audit entry per rename and per applied operation (sample before/after
         and the number of rows changed).
+        After approved recommendations: applies unclaimed-column decisions — rejected columns
+        are dropped; manually assigned columns are renamed or space-merged into their target
+        (NaN-safe, grouping ensures consistent merge even when two sources share a target).
         Enforces the 17-column order, validates (Pandera + numeric types) and writes
         Cleaned_SOV.xlsx and Audit_Log.xlsx (exact names, plus timestamped copies) and
         re-opens the file to confirm it has no merged cells. A failed validation is shown to the reviewer;

@@ -54,6 +54,7 @@ def _load_source_df(state: SOVState) -> Optional[pd.DataFrame]:
 def _apply_approved_transformations(
     source_df: pd.DataFrame,
     approved_recs: List[Recommendation],
+    state: Optional["SOVState"] = None,
 ) -> tuple[pd.DataFrame, List[AuditEntry]]:
     """
     Apply only approved transformations from the whitelist.
@@ -213,6 +214,97 @@ def _apply_approved_transformations(
                     "Failed to apply '%s' to '%s': %s", operation, target_col, e
                 )
 
+    # Step 3: Handle unclaimed column decisions (manual assign / reject from human review).
+    # Group assignments by target field first so that multiple source columns assigned to the
+    # same target are always space-merged, whether or not that target was already populated.
+    unclaimed = getattr(state, "unclaimed_decisions", {}) or {}
+
+    if unclaimed:
+        # Build target → [source_cols] groups (preserve insertion order)
+        from collections import defaultdict
+        assign_groups: dict = defaultdict(list)
+        reject_cols: list = []
+
+        for src_col, decision in unclaimed.items():
+            if decision == "__rejected__":
+                reject_cols.append(src_col)
+            elif decision:  # non-empty target name
+                assign_groups[decision].append(src_col)
+
+        # Drop rejected columns
+        for src_col in reject_cols:
+            if src_col in df.columns:
+                df = df.drop(columns=[src_col])
+                logger.info("Unclaimed column '%s' rejected — dropped.", src_col)
+                audit_entries.append(create_audit_entry(
+                    source_column=src_col,
+                    target_column="",
+                    transformation_applied="unclaimed_reject",
+                    before_value=f"Column '{src_col}'",
+                    after_value="Dropped (rejected by reviewer)",
+                    confidence=1.0,
+                    approved_by="human",
+                    recommendation_id=None,
+                ))
+
+        # Process each target group
+        for tgt_field, src_cols in assign_groups.items():
+            # Filter to columns that still exist
+            src_cols = [c for c in src_cols if c in df.columns]
+            if not src_cols:
+                continue
+
+            def _safe_str(s: pd.Series) -> pd.Series:
+                """Convert to str, but keep NaN as actual NaN (not the string 'nan')."""
+                return s.where(s.isna(), s.astype(str))
+
+            def _merge_series(left: pd.Series, right: pd.Series) -> pd.Series:
+                """Space-concatenate two series, ignoring NaN on either side."""
+                l_str = _safe_str(left)
+                r_str = _safe_str(right)
+                result = pd.Series(index=left.index, dtype=object)
+                both_valid   = l_str.notna() & r_str.notna()
+                only_left    = l_str.notna() & r_str.isna()
+                only_right   = l_str.isna()  & r_str.notna()
+                result[both_valid]  = l_str[both_valid] + " " + r_str[both_valid]
+                result[only_left]   = l_str[only_left]
+                result[only_right]  = r_str[only_right]
+                return result
+
+            # Base: use existing target column if already populated, else use first source col
+            if tgt_field in df.columns:
+                accumulator = df[tgt_field].copy()
+                for src_col in src_cols:
+                    accumulator = _merge_series(accumulator, df[src_col])
+                    df = df.drop(columns=[src_col])
+                df[tgt_field] = accumulator
+                logger.info(
+                    "Unclaimed column(s) %s merged into existing target '%s'.", src_cols, tgt_field
+                )
+            else:
+                # Target did not exist: first source becomes the base via rename
+                first_src = src_cols[0]
+                df = df.rename(columns={first_src: tgt_field})
+                accumulator = df[tgt_field].copy()
+                for src_col in src_cols[1:]:
+                    accumulator = _merge_series(accumulator, df[src_col])
+                    df = df.drop(columns=[src_col])
+                df[tgt_field] = accumulator
+                logger.info(
+                    "Unclaimed column(s) %s assigned/merged into new target '%s'.", src_cols, tgt_field
+                )
+
+            audit_entries.append(create_audit_entry(
+                source_column=", ".join(assign_groups[tgt_field]),
+                target_column=tgt_field,
+                transformation_applied="unclaimed_manual_assign",
+                before_value=f"Unmapped column(s): {', '.join(assign_groups[tgt_field])}",
+                after_value=f"Merged into '{tgt_field}' (space-separated)",
+                confidence=1.0,
+                approved_by="human",
+                recommendation_id=None,
+            ))
+
     return df, audit_entries
 
 
@@ -247,8 +339,8 @@ def run_transformation(state: SOVState) -> SOVState:
         state.stage = WorkflowStage.ERROR
         return state
 
-    # Apply transformations
-    transformed_df, audit_entries = _apply_approved_transformations(source_df, approved_recs)
+    # Apply transformations (pass state so unclaimed_decisions are processed)
+    transformed_df, audit_entries = _apply_approved_transformations(source_df, approved_recs, state=state)
 
     # Enforce 17-column schema
     final_df = enforce_column_order(transformed_df)
