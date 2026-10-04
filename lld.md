@@ -185,7 +185,7 @@ Sheet Composite Score:
 $$\text{Score}_{\text{sheet}} = 0.35 \cdot S_{\text{header}} + 0.25 \cdot D_{\text{density}} + 0.20 \cdot C_{\text{type}} + 0.20 \cdot V_{\text{rows}}$$
 
 Where:
-- $S_{\text{header}} = \min\left(1.0, \frac{\text{synonym\_matches}}{17} \times 3.0\right)$
+- $S_{\text{header}} = \min\left(1.0, \frac{\text{synonym matches}}{17} \times 3.0\right)$
 - $D_{\text{density}} = \text{non-null cell ratio}$
 - $C_{\text{type}} = \text{fraction of columns (first 200 data rows) that are} >80\% \text{ numeric or} <20\% \text{ numeric}$
 - $V_{\text{rows}} = \min(1.0, \frac{\text{rows below header}}{100})$
