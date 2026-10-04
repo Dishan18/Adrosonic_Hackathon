@@ -1205,35 +1205,25 @@ def render_unclaimed_section(state: SOVState, active_sheet: Optional[str] = None
                 border_color = "#E5E7EB"  # neutral
                 status_label = "<span style='color:#6B7280;font-size:11px;'>No action</span>"
 
-            st.markdown(
-                f"""
-                <div style="background:#FFFFFF;border:1px solid {border_color};border-radius:10px;
-                            padding:14px 16px;margin-bottom:10px;">
-                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-                        <div>
-                            {sheet_badge}
-                            <strong style="font-size:14px;color:#111827;font-family:monospace;">{col}</strong>
-                        </div>
-                        {status_label}
-                    </div>
-                """,
-                unsafe_allow_html=True,
-            )
-
             # Sample values preview
+            sample_html = ""
             df_for_sample = source_dfs.get(s_name)
             if df_for_sample is not None and col in df_for_sample.columns:
                 samples = df_for_sample[col].dropna().astype(str).head(4).tolist()
                 if samples:
                     sample_str = " · ".join(f"<code>{s[:30]}</code>" for s in samples)
-                    st.markdown(
-                        f"<div style='font-size:12px;color:#6B7280;margin-bottom:10px;'>"
-                        f"Sample values: {sample_str}"
-                        f"</div>",
-                        unsafe_allow_html=True,
-                    )
+                    sample_html = f"<div style='font-size:12px;color:#6B7280;margin-top:8px;'>Sample values: {sample_str}</div>"
 
-            st.markdown("</div>", unsafe_allow_html=True)
+            card_html = (
+                f'<div style="background:#FFFFFF;border:1px solid {border_color};border-radius:10px;padding:14px 16px;margin-bottom:10px;">'
+                f'<div style="display:flex;justify-content:space-between;align-items:center;">'
+                f'<div>{sheet_badge}<strong style="font-size:14px;color:#111827;font-family:monospace;">{col}</strong></div>'
+                f'{status_label}'
+                f'</div>'
+                f'{sample_html}'
+                f'</div>'
+            )
+            st.markdown(card_html, unsafe_allow_html=True)
 
             # Controls row
             col_sel, col_assign_btn, col_rej_btn, _ = st.columns([3, 1, 1, 2])
