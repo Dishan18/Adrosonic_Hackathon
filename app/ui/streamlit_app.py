@@ -891,8 +891,8 @@ def render_review_section(state: SOVState):
             st.session_state.target_nav_tab = "Final Output"
             st.rerun()
 
-    # Unclaimed columns section — rendered below everything else in the Review tab
-    render_unclaimed_section(state)
+    # Unclaimed columns section — rendered below everything else in the Review tab (filtered by active sheet)
+    render_unclaimed_section(state, active_sheet=active_sheet_filter)
 
 
 def _render_recommendation_card(state: SOVState, rec: Recommendation):
@@ -1144,30 +1144,41 @@ def _run_rereason(state: SOVState):
 # Unclaimed Columns Section
 # ---------------------------------------------------------------------------
 
-def render_unclaimed_section(state: SOVState):
+def render_unclaimed_section(state: SOVState, active_sheet: Optional[str] = None):
     """Render the 'Unclaimed Source Columns' section at the bottom of the Review tab."""
-    if state.mappings is None:
-        return
-
-    if getattr(state, "sheet_states", None) and len(state.sheet_states) > 1:
-        unclaimed_cols = []
-        seen = set()
-        for s_state in state.sheet_states.values():
-            if s_state.mappings and s_state.mappings.unmapped_source_columns:
-                for c in s_state.mappings.unmapped_source_columns:
-                    if c not in seen:
-                        seen.add(c)
-                        unclaimed_cols.append(c)
-    else:
-        unclaimed_cols = state.mappings.unmapped_source_columns
-    if not unclaimed_cols:
-        return
-
     from app.agents.transformation import _load_source_df
+
+    has_multi = getattr(state, "sheet_states", None) and len(state.sheet_states) > 1
+
+    if has_multi and active_sheet and active_sheet != "All Sheets":
+        sub_state = state.sheet_states.get(active_sheet)
+        if sub_state is None or sub_state.mappings is None:
+            return
+        unclaimed_items = [(col, active_sheet) for col in sub_state.mappings.unmapped_source_columns]
+        source_dfs = {active_sheet: _load_source_df(sub_state)}
+        section_title = f"Unclaimed Source Columns — {active_sheet} ({len(unclaimed_items)})"
+    elif has_multi:
+        unclaimed_items = []
+        source_dfs = {}
+        for s_name, sub in state.sheet_states.items():
+            if sub.mappings and sub.mappings.unmapped_source_columns:
+                source_dfs[s_name] = _load_source_df(sub)
+                for c in sub.mappings.unmapped_source_columns:
+                    unclaimed_items.append((c, s_name))
+        section_title = f"Unclaimed Source Columns ({len(unclaimed_items)})"
+    else:
+        if state.mappings is None:
+            return
+        unclaimed_items = [(col, None) for col in state.mappings.unmapped_source_columns]
+        source_dfs = {None: _load_source_df(state)}
+        section_title = f"Unclaimed Source Columns ({len(unclaimed_items)})"
+
+    if not unclaimed_items:
+        return
 
     st.markdown("<div style='height: 20px;'></div>", unsafe_allow_html=True)
 
-    with st.expander(f"Unclaimed Source Columns ({len(unclaimed_cols)})", expanded=False):
+    with st.expander(section_title, expanded=False):
         st.markdown(
             "<div style='font-size:13px;color:#6B7280;margin-bottom:12px;'>"
             "These source columns were not mapped to any of the 17 standard fields by the agents. "
@@ -1176,17 +1187,12 @@ def render_unclaimed_section(state: SOVState):
             unsafe_allow_html=True,
         )
 
-        # Load a sample of source data for preview (best-effort)
-        source_df = None
-        try:
-            source_df = _load_source_df(state)
-        except Exception:
-            pass
-
         decisions: Dict[str, str] = st.session_state.get("unclaimed_decisions", {})
 
-        for col in unclaimed_cols:
+        for col, s_name in unclaimed_items:
             current = decisions.get(col, "")
+            key_suffix = f"_{s_name}_{col}" if s_name else f"_{col}"
+            sheet_badge = f'<span style="background:#EBF5FF;color:#0071E3;font-size:11px;font-weight:600;padding:2px 6px;border-radius:4px;margin-right:6px;">📄 {s_name}</span>' if (s_name and active_sheet == "All Sheets") else ""
 
             # Determine card border color based on current decision
             if current == "__rejected__":
@@ -1204,7 +1210,10 @@ def render_unclaimed_section(state: SOVState):
                 <div style="background:#FFFFFF;border:1px solid {border_color};border-radius:10px;
                             padding:14px 16px;margin-bottom:10px;">
                     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-                        <strong style="font-size:14px;color:#111827;font-family:monospace;">{col}</strong>
+                        <div>
+                            {sheet_badge}
+                            <strong style="font-size:14px;color:#111827;font-family:monospace;">{col}</strong>
+                        </div>
                         {status_label}
                     </div>
                 """,
@@ -1212,8 +1221,9 @@ def render_unclaimed_section(state: SOVState):
             )
 
             # Sample values preview
-            if source_df is not None and col in source_df.columns:
-                samples = source_df[col].dropna().astype(str).head(4).tolist()
+            df_for_sample = source_dfs.get(s_name)
+            if df_for_sample is not None and col in df_for_sample.columns:
+                samples = df_for_sample[col].dropna().astype(str).head(4).tolist()
                 if samples:
                     sample_str = " · ".join(f"<code>{s[:30]}</code>" for s in samples)
                     st.markdown(
@@ -1236,25 +1246,25 @@ def render_unclaimed_section(state: SOVState):
                     "Assign to",
                     options=options,
                     index=current_idx,
-                    key=f"uncl_sel_{col}",
+                    key=f"uncl_sel{key_suffix}",
                     label_visibility="collapsed",
                     format_func=lambda x: "— Select target field —" if x == "" else x,
                 )
 
             with col_assign_btn:
-                if st.button("Assign", key=f"uncl_assign_{col}", disabled=(not chosen)):
+                if st.button("Assign", key=f"uncl_assign{key_suffix}", disabled=(not chosen)):
                     decisions[col] = chosen
                     st.session_state.unclaimed_decisions = decisions
                     st.rerun()
 
             with col_rej_btn:
                 if current == "__rejected__":
-                    if st.button("Undo", key=f"uncl_undo_{col}"):
+                    if st.button("Undo", key=f"uncl_undo{key_suffix}"):
                         decisions.pop(col, None)
                         st.session_state.unclaimed_decisions = decisions
                         st.rerun()
                 else:
-                    if st.button("Reject", key=f"uncl_rej_{col}"):
+                    if st.button("Reject", key=f"uncl_rej{key_suffix}"):
                         decisions[col] = "__rejected__"
                         st.session_state.unclaimed_decisions = decisions
                         st.rerun()
