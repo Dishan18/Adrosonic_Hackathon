@@ -33,7 +33,7 @@ class SOVState(BaseModel):
     sheet_manifest: Optional[SheetManifest] = None
     header_row: int = 0                       # header row of the primary sheet (0-indexed)
     primary_sheet_name: Optional[str] = None
-    data_sheets: List[str] = []               # every PRIMARY sheet, merged into the output
+    data_sheets: List[str] = []               # every PRIMARY sheet, isolated and exported separately
     # Agent 2
     mappings: Optional[MappingResult] = None
     # Agent 3
@@ -41,9 +41,9 @@ class SOVState(BaseModel):
     recommendations: List[Recommendation] = []
     # Human decisions
     decisions: List[HumanDecision] = []
-    # Human decisions on unclaimed (unmapped) source columns:
-    # keys = source column name, values = TARGET_FIELDS name OR "__rejected__"
-    unclaimed_decisions: Dict[str, str] = {}
+    # Human decisions on unclaimed (unmapped) source columns scoped by sheet:
+    # {sheet_name: {column_name: TARGET_FIELDS name OR "__rejected__"}}
+    unclaimed_decisions: Dict[str, Dict[str, str]] = {}
     # Agent 4
     output_path: Optional[str] = None
     audit_log_path: Optional[str] = None
@@ -66,7 +66,7 @@ class SOVState(BaseModel):
 
 ```python
 class SheetClassification(str, Enum):
-    PRIMARY = "Primary"        # SOV location data (all PRIMARY sheets are merged)
+    PRIMARY = "Primary"        # SOV location data (each PRIMARY sheet is processed and exported separately)
     SECONDARY = "Secondary"    # Some SOV signal, not used as data
     REJECT = "Reject"          # Cover pages, disclaimers, empty tabs
 
@@ -263,7 +263,7 @@ Where:
 #### 1:1 Target Uniqueness (`run_schema_mapping`)
 1. **Pass 1:** score every named column independently (no LLM).
 2. **Pass 2:** repeatedly commit the pending column with the highest current confidence. If its target is already claimed by a column from an overlapping sheet, re-score it with that target excluded and put it back in the queue at its new confidence. A column still unresolved at its turn gets the LLM stage.
-3. Targets are unique **per sheet**: columns that come from different merged sheets (never sharing a row) may claim the same target.
+3. Targets are unique **per sheet**: each PRIMARY sheet maintains its own isolated mapping result, preventing column collisions across sheets.
 4. `_apply_hungarian_assignment` is kept as a final safety net: if two columns from the same sheet still share a target, the lower-confidence one is demoted to `UNRESOLVED` with the reason in `rationale`.
 
 ---
@@ -402,10 +402,10 @@ schema = pa.DataFrameSchema(
 
 ## 4. Test Strategy & Verification
 
-The system is guarded by 92 tests in `tests/test_sov_system.py`; `tests/conftest.py` redirects ChromaDB, outputs, uploads and checkpoints to a temporary directory.
+The system is guarded by 93 tests in `tests/test_sov_system.py`; `tests/conftest.py` redirects ChromaDB, outputs, uploads and checkpoints to a temporary directory.
 - **Unit Tests:** ingestion, header detection, sheet ranking, exact/fuzzy mapping, confidence, value profiling, anomaly rules, every whitelisted transformation, null preservation, schema validation, masking, LLM-provider gating.
 - **Integration Tests:** end-to-end runs on the synthetic samples; the LangGraph run → pause → reject/re-reason → resume → export cycle; audit logging; malformed input.
-- **Real-file regressions:** synthetic workbooks reproducing defects found in the broker files (merged footnotes, first-come mapping, value-profile veto, multi-sheet merge, rejected same-name columns, zero-stripped ZIPs, flags sharing a field). The four broker files themselves are not part of the automated suite; they are verified manually (see `README.md`, "Verified on Real SOVs").
+- **Real-file regressions:** synthetic workbooks reproducing defects found in the broker files (merged footnotes, first-come mapping, value-profile veto, multi-sheet isolation & separate exports, rejected same-name columns, zero-stripped ZIPs, flags sharing a field). The four broker files themselves are not part of the automated suite; they are verified manually (see `README.md`, "Verified on Real SOVs").
 
 ---
 
@@ -424,7 +424,7 @@ Rendered at the **bottom of the Review tab**, below the four standard expanders,
 - **Visual status badge** — red border = rejected, green = assigned, neutral = no decision
 - **Controls row:** selectbox (17 target fields + blank placeholder) + **Assign** button + **Reject**/**Undo** button
 
-Decisions are stored in `st.session_state["unclaimed_decisions"]` (a `Dict[str, str]`):
+Decisions are stored scoped by sheet in `st.session_state["unclaimed_decisions"]` (a `Dict[str, Dict[str, str]]`, `{sheet_name: {col: decision}}`):
 
 | Value | Meaning |
 |-------|---------|

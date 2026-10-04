@@ -50,6 +50,7 @@ chroma_db_backup_*/
 chroma_demo/
 checkpoints.sqlite
 *.sqlite
+*.sqlite*
 *.db
 
 # IDEs

@@ -1080,6 +1080,55 @@ class TestRealWorldRegressions:
         assert Path(state.output_paths["Current"]).name == "Cleaned_SOV_Current.xlsx"
         assert Path(state.output_paths["Deleted"]).name == "Cleaned_SOV_Deleted.xlsx"
 
+    def test_unclaimed_decisions_scoped_by_sheet_on_multi_primary_sheets(self, tmp_path):
+        from app.agents.transformation import run_transformation
+        from app.orchestration.state import create_initial_state
+        from app.agents.sheet_discovery import run_sheet_discovery
+        from app.agents.schema_mapping import run_schema_mapping
+        from app.agents.quality_reasoning import run_quality_reasoning
+        from app.schemas.state_models import RecommendationStatus
+
+        header_a = ["Loc #", "Address", "Zip", "Building Value", "Year Built", "Internal Notes"]
+        header_b = ["Location ID", "Street Address", "Postal Code", "Bldg Value", "Yr Built", "Internal Notes"]
+        sheet_a = [header_a] + [[i, f"{i} Main St", 75201, 100000 + i, 1990, f"NOTE_A_{i}"] for i in range(1, 6)]
+        sheet_b = [header_b] + [[i, f"{i} Oak Ave", 75202, 900000 + i, 2001, f"NOTE_B_{i}"] for i in range(10, 15)]
+        path = _write_xlsx(tmp_path / "multi_unclaimed.xlsx", {"SheetA": sheet_a, "SheetB": sheet_b})
+
+        init_state = create_initial_state(path, "multi_unclaimed.xlsx", "xlsx", session_id="uncl_test")
+        state = run_sheet_discovery(init_state)
+        assert set(state.data_sheets) == {"SheetA", "SheetB"}
+
+        state = run_schema_mapping(state)
+        state = run_quality_reasoning(state)
+
+        state.recommendations = [
+            r.model_copy(update={"status": RecommendationStatus.APPROVED})
+            for r in state.recommendations
+        ]
+
+        # SheetA assigns unmapped "Internal Notes" to Occupancy
+        # SheetB rejects unmapped "Internal Notes" (drops it)
+        state.unclaimed_decisions = {
+            "SheetA": {"Internal Notes": "Occupancy"},
+            "SheetB": {"Internal Notes": "__rejected__"},
+        }
+
+        transformed = run_transformation(state)
+
+        assert "SheetA" in transformed.output_paths
+        assert "SheetB" in transformed.output_paths
+
+        df_a = pd.read_excel(transformed.output_paths["SheetA"])
+        df_b = pd.read_excel(transformed.output_paths["SheetB"])
+
+        # SheetA: "Internal Notes" was assigned to Occupancy
+        assert "Occupancy" in df_a.columns
+        assert df_a["Occupancy"].dropna().str.startswith("NOTE_A_").all()
+
+        # SheetB: "Internal Notes" was rejected, so it did NOT populate Occupancy or leak
+        assert "Occupancy" in df_b.columns
+        assert df_b["Occupancy"].isna().all()
+
     def test_rejected_same_name_column_does_not_leak(self, tmp_path):
         from app.agents.transformation import run_transformation
         from app.schemas.state_models import ActionType, RecommendationStatus

@@ -43,7 +43,7 @@ This system runs **four specialized agents** under a LangGraph state machine (Ag
 1. **Deterministic Execution Sandbox:** The LLM never modifies spreadsheet rows or generates values. It explains issues, resolves genuinely ambiguous column mappings, and may only choose operations from a static whitelist.
 2. **Confidence-Gated Autonomy:** Every recommendation is scored between `0.0` and `1.0`. **Approve All High-Confidence** approves pending items at or above $\tau_{high} = 0.90$ (`HIGH_CONFIDENCE_THRESHOLD`). The fallback **Approve All Remaining** button covers only items that do not require review; review-required items are always decided one by one.
 3. **Dual-Brain Hybrid Resolution:** Deterministic stages (approved memory → normalized exact synonym → RapidFuzz + BGE semantic candidates) resolve most mappings. Every candidate is cross-checked against the column's actual values, and a candidate the values contradict is vetoed. The LLM Gateway (Ollama, Groq or Gemini) is called only for columns that remain unresolved.
-4. **Strict Output Invariance:** Irrespective of the input layout (single-sheet, multi-tab, merged headers), `Cleaned_SOV.xlsx` contains exactly 17 ordered columns. When several sheets hold location data, they are merged into that one table.
+4. **Strict Output Invariance:** Irrespective of the input layout (single-sheet, multi-tab, merged headers), every exported sheet contains exactly 17 ordered columns. When a workbook has multiple PRIMARY data sheets, each sheet is processed with strict isolation and exported as an independent deliverable (`Cleaned_SOV_<sheet>.xlsx` + `Audit_Log_<sheet>.xlsx`), with `Cleaned_SOV.xlsx` preserved as an explicit primary deliverable alias.
 
 ---
 
@@ -52,7 +52,7 @@ This system runs **four specialized agents** under a LangGraph state machine (Ag
 ```
 ┌─────────────────────────────────────────────────────────────────────────────────────────┐
 │                                 PRESENTATION TIER                                       │
-│        Streamlit UI (review cards, bulk approval, before/after preview, downloads)      │
+│    Streamlit UI (sheet selector, review cards, bulk approval, before/after, downloads)  │
 └───────────────────────────────────────────┬─────────────────────────────────────────────┘
                                             │ Excel / CSV upload
                                             ▼
@@ -63,14 +63,15 @@ This system runs **four specialized agents** under a LangGraph state machine (Ag
 │   - Unmerge (fill down)         - Memory (ChromaDB)             - Completeness index    │
 │   - Header row detection        - Normalized exact match        - Anomaly detection     │
 │   - Sheet scoring/ranking       - RapidFuzz + BGE candidates    - Whitelist suggestions │
-│   - All PRIMARY sheets merged   - Value-profile veto            - Masked LLM reasoning  │
-│                                 - Confidence-ordered 1:1        │                       │
+│   - Primary sheet isolation     - Value-profile veto            - Masked LLM reasoning  │
+│                                 - Per-sheet 1:1 mapping         │                       │
 │                                 - LLM fallback                  │                       │
 └───────────────────────────────────────────┬─────────────────────────────────────────────┘
                                             │ interrupt_before = human_review
                                             ▼
 ┌─────────────────────────────────────────────────────────────────────────────────────────┐
 │                         HUMAN-IN-THE-LOOP APPROVAL GATE                                 │
+│  Sheet Filter: inspect cards and unclaimed columns per sheet or across all sheets       │
 │  Approve / 1-Click Reject (drops column) / Change Target (ChromaDB feedback); KPI Card  │
 │  Unclaimed Columns: manually assign to any target field (space-merged) or reject (drop) │
 └───────────────────────────────────────────┬─────────────────────────────────────────────┘
@@ -81,7 +82,7 @@ This system runs **four specialized agents** under a LangGraph state machine (Ag
 │   - Approved renames only; rejected columns explicitly dropped and audited              │
 │   - Whitelist-only series operations, audited before write-back                         │
 │   - 17-column enforcement, Pandera + numeric type-conformance validation                │
-│   - Cleaned_SOV.xlsx (Zip formatted 00000) + Audit_Log.xlsx                             │
+│   - Cleaned_SOV_<sheet>.xlsx & Audit_Log_<sheet>.xlsx (and Cleaned_SOV.xlsx alias)      │
 └─────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -104,10 +105,10 @@ Raw Workbook (.xlsx / .csv)
   │     horizontal banners and footnotes are not copied across columns.
   │     Scores the first 30 rows per sheet for the header row; scores each sheet
   │     (header match, density, type consistency, volume) → PRIMARY / SECONDARY / REJECT.
-  │     All PRIMARY sheets become data sheets (best-scoring first).
+  │     All PRIMARY sheets become independent data sheets (best-scoring is primary_sheet_name).
   │
   ├─► [Agent 2. Schema Mapping]
-  │     Loads all data sheets stacked into one frame (columns aligned by header).
+  │     Evaluates each PRIMARY sheet in its own isolated context (columns matched against sheet header).
   │     For each raw column:
   │       Stage 0: ChromaDB memory (human-approved mappings)
   │       Stage 1: normalized exact synonym lookup
@@ -118,7 +119,7 @@ Raw Workbook (.xlsx / .csv)
   │     Targets are claimed strongest-column-first and are unique per sheet.
   │
   ├─► [Agent 3. Quality Reasoning]
-  │     Runs 12 deterministic checks on the mapped view: completeness, currency
+  │     Runs 12 deterministic checks on each mapped sheet view: completeness, currency
   │     symbols, negative amounts, non-numeric amounts, Year Built range, Storeys,
   │     building counts, sprinkler codes, state codes, duplicate references,
   │     ZIP format, non-integer integer fields.
@@ -127,25 +128,27 @@ Raw Workbook (.xlsx / .csv)
   │     masked examples only.
   │
   ├─► [Human-in-the-Loop Review Gate]  (graph paused before human_review)
-  │     Review cards: before → after example, confidence, rationale.
+  │     Review cards: before → after example, confidence, rationale, and sheet identifier.
+  │     Reviewer can filter by sheet or view all recommendations at once.
   │     A rejection with a note re-runs Agent 3 with that feedback: a rejected
   │     mapping gets the next-best target from the mapping cascade or is
   │     ESCALATED to a human (who can assign a target); a rejected fix is
   │     withdrawn with an explanation. Every other decision and ID is preserved.
   │
   └─► [Agent 4. Controlled Transformation, Validation & Export]
-        Applies only APPROVED recommendations: column renames first, then whitelisted
+        Applies only APPROVED recommendations per sheet: column renames first, then whitelisted
         operations (`strip_currency`, `to_float`, `to_int`, `to_str`, `to_year_int`,
         `to_zip`, `state_to_abbrev`, `normalize_sprinkler_code`, `trim_whitespace`,
         `normalize_spaces`, `normalize_date`; `flag_for_review` changes nothing).
         Writes one audit entry per rename and per applied operation (sample before/after
         and the number of rows changed).
-        After approved recommendations: applies unclaimed-column decisions — rejected columns
+        After approved recommendations: applies unclaimed-column decisions per sheet — rejected columns
         are dropped; manually assigned columns are renamed or space-merged into their target
         (NaN-safe, grouping ensures consistent merge even when two sources share a target).
         Enforces the 17-column order, validates (Pandera + numeric types) and writes
-        Cleaned_SOV.xlsx and Audit_Log.xlsx (exact names, plus timestamped copies) and
-        re-opens the file to confirm it has no merged cells. A failed validation is shown to the reviewer;
+        Cleaned_SOV_<sheet>.xlsx and Audit_Log_<sheet>.xlsx for each PRIMARY sheet,
+        along with Cleaned_SOV.xlsx and Audit_Log.xlsx (exact names, plus timestamped copies).
+        Re-opens each file to confirm 0 merged cells. A failed validation is shown to the reviewer;
         the files are still written so the problems can be inspected.
 ```
 
@@ -200,7 +203,7 @@ Measured on 2026-10-03 on a CPU-only Windows workstation, LLM disabled, empty me
 | **Anomaly Recall (synthetic benchmark)** | ≥ 90% | 100% |
 | **Sheet discovery, 8-sheet / 2 MB workbook (SOV_Q8B3)** | — | 6–15 s depending on machine load (60–126 s before the parse cache) |
 | **End-to-end pipeline, real SOVs (cold start, LLM off)** | < 60 s | 15–22 s per file (B4ID 16 s, H6D2 17 s, K4T9 15 s, Q8B3 22 s) |
-| **Full test suite** | 0 failures | 92 passed in 17–34 s |
+| **Full test suite** | 0 failures | 93 passed in 17–34 s |
 | **Failure Recovery** | No unhandled exceptions | Malformed files end in an ERROR stage with a readable message; LLM failures fall back to deterministic results |
 | **Schema Strictness** | 17 ordered columns, typed numeric fields | 17 ordered columns always; type problems reported as validation errors |
 

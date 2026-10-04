@@ -241,7 +241,24 @@ def _apply_approved_transformations(
     # Step 3: Handle unclaimed column decisions (manual assign / reject from human review).
     # Group assignments by target field first so that multiple source columns assigned to the
     # same target are always space-merged, whether or not that target was already populated.
-    unclaimed = getattr(state, "unclaimed_decisions", {}) or {}
+    unclaimed_raw = getattr(state, "unclaimed_decisions", {}) or {}
+    sheet_name = getattr(state, "primary_sheet_name", None) or ""
+
+    unclaimed: Dict[str, str] = {}
+    if isinstance(unclaimed_raw, dict):
+        if sheet_name and sheet_name in unclaimed_raw and isinstance(unclaimed_raw[sheet_name], dict):
+            unclaimed = unclaimed_raw[sheet_name]
+        elif sheet_name and any(isinstance(v, dict) for v in unclaimed_raw.values()):
+            # Search case-insensitively or with normalized whitespace
+            for k, v in unclaimed_raw.items():
+                if isinstance(v, dict) and str(k).strip().lower() == str(sheet_name).strip().lower():
+                    unclaimed = v
+                    break
+        elif len(unclaimed_raw) == 1 and isinstance(next(iter(unclaimed_raw.values())), dict):
+            unclaimed = next(iter(unclaimed_raw.values()))
+        elif all(isinstance(v, str) for v in unclaimed_raw.values()):
+            # Legacy flat Dict[str, str]
+            unclaimed = unclaimed_raw
 
     if unclaimed:
         # Build target → [source_cols] groups (preserve insertion order)

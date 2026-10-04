@@ -15,7 +15,7 @@ Statement of Values (SOV) files in commercial property insurance are notoriously
    - Inspects all sheets in uploaded `.xlsx`/`.csv` files.
    - Computes tabular density and header candidate scores; unmerges cells (fill down only) and extracts data.
    - Samples up to 200 rows for type consistency scoring (fast on 5000+ row files).
-   - Every sheet classified PRIMARY is a data sheet; all of them are merged into one output.
+   - Every sheet classified PRIMARY is an independent data sheet, isolated immediately for per-sheet mapping and transformation.
 2. **Agent 2: Schema Mapping Agent (`app.agents.schema_mapping`)**
    - Multi-stage cascading column mapping:
      1. Vector Memory Retrieval (ChromaDB, human-approved mappings)
@@ -33,7 +33,7 @@ Statement of Values (SOV) files in commercial property insurance are notoriously
    - Strict whitelist execution engine (LLM never executes arbitrary code on real data).
    - Supported operations: `strip_currency`, `to_float`, `to_int`, `to_str`, `to_year_int`, `to_zip`, `state_to_abbrev`, `normalize_sprinkler_code`, `trim_whitespace`, `normalize_spaces`, `normalize_date`, `flag_for_review`.
    - Exact 17-column schema enforcement, Pandera validation and numeric type checks.
-   - Export to Excel: `Cleaned_SOV.xlsx` (Zip formatted `00000`) + `Audit_Log.xlsx`.
+   - Export to Excel: `Cleaned_SOV_<sheet>.xlsx` + `Audit_Log_<sheet>.xlsx` for each PRIMARY sheet, plus `Cleaned_SOV.xlsx` compatibility alias.
 
 ---
 
@@ -123,13 +123,21 @@ Checked against the challenge brief (constraints C-01–C-07, success metrics, 7
 8. **Deterministic mode:** `LLM_PROVIDER=none` switches the LLM off even when API keys are set in `.env`.
 9. **Demo script:** `DEMO.md`; final deck: `CacheMeIfYouCan_PS3_Final.pptx`.
 
+### Session 7: Multi-Sheet Isolation & Separate Exports (2026-10-04)
+1. **Isolated Multi-PRIMARY Ingestion**: Separated multiple PRIMARY sheets immediately after Agent 1 Discovery (`load_single_sheet_data`, independent `sheet_states` in `SOVState`). Prevents cross-sheet header collisions and data contamination.
+2. **Dedicated Per-Sheet Outputs**: Export separate validated 17-column deliverables `Cleaned_SOV_<sheet>.xlsx` and `Audit_Log_<sheet>.xlsx` for each primary sheet, while preserving `Cleaned_SOV.xlsx` as an explicit primary deliverable alias for backward compatibility.
+3. **Streamlit UI Sheet Selectors**: Dynamic sheet filters across Review, Schema Mapping, Data Quality, and Final Output tabs.
+4. **Unclaimed Column Filtering & Display**: Unmapped source column cards dynamically filter according to the active sheet selection; eliminated Markdown indentation code box artifacts.
+5. **Quality Score Per Sheet**: Tabular and KPI score computations handle multi-sheet states cleanly.
+6. **Per-Sheet Unclaimed Column Decisions**: Scoped `unclaimed_decisions` to `Dict[str, Dict[str, str]]` with backwards-compatible fallback; added regression coverage ensuring decisions on sheet A do not affect sheet B.
+
 ---
 
 ## 4. Test Suite & Benchmark Verification
 
 ### Pytest Coverage (`tests/test_sov_system.py`)
-- **Total Tests:** 92
-- **Passed:** 92 (100%)
+- **Total Tests:** 93
+- **Passed:** 93 (100%)
 - **Failed:** 0
 - **Duration:** 17–34 s with the LLM disabled (`LLM_PROVIDER=none`), depending on machine load
 
@@ -139,7 +147,7 @@ Checked against the challenge brief (constraints C-01–C-07, success metrics, 7
 | `SOV_B4ID.xlsx` | `SOV` | 11 | 15 | 15/15 | Reports `Storeys` 1.5 (fraction kept, not truncated) |
 | `SOV_H6D2.xlsx` | `SOV` | 6 | 19 | 15/15 | ✅ Passed |
 | `SOV_K4T9.xlsx` | `Locations` | 5 | 34 | 12/12 | ✅ Passed |
-| `SOV_Q8B3.xlsx` | `23-24 Values`, `Deleted Locations`, `Insured Elsewhere` | 0 | 990 | 13/13 | Reports `Contents` "Included in Bldg" |
+| `SOV_Q8B3.xlsx` | `23-24 Values` (834), `Deleted Locations` (69), `Insured Elsewhere` (87) | 0 | 834, 69, 87 (separate exports) | 13/13 | Reports `Contents` "Included in Bldg" |
 
 ### Benchmark Suite Evaluation (`benchmark.py`, synthetic samples)
 | Metric | Achieved | Target Requirement | Status |
@@ -170,10 +178,10 @@ The provider in `LLM_PROVIDER` is tried first. Ollama must be running before sta
 ```
 Upload File → Click "Run Pipeline" (locked while running)
     → LangGraph runs Agents 1–3 and pauses before human review
-    → Review recommendations (approve/reject/change target; bulk approval for ≥90% items)
+    → Review recommendations (sheet filter, approve/reject/change target; bulk approval for ≥90% items)
     → "Apply Approved Transformations" appears when all review-required items are decided
     → Click Apply (locked while running) → graph resumes into Agent 4
-    → Final Output tab: download Cleaned_SOV.xlsx and Audit_Log.xlsx
+    → Final Output tab: download Cleaned_SOV_<sheet>.xlsx / Cleaned_SOV.xlsx and Audit_Log.xlsx
 ```
 
 ### Key UI Features
@@ -181,8 +189,9 @@ Upload File → Click "Run Pipeline" (locked while running)
 2. **Approve All High-Confidence**: bulk-approves pending recommendations at ≥90% confidence
 3. **Approve All Remaining**: shown when no ≥90% items are pending; covers only items that do not require review. Otherwise a disabled "Review Remaining Individually" button is shown
 4. **Apply Approved Transformations**: unlocks only when all review_required=True items are decided
-5. **Discovery section**: lists the data sheets merged into the output
-6. **Final Output tab**: download links for both output files + validation status badge
+5. **Sheet Selectors**: filter Review, Mapping, Quality, and Output tabs by individual primary sheet or all sheets
+6. **Final Output tab**: download links for per-sheet deliverables + validation status badge
+
 
 ---
 

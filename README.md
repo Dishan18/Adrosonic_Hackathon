@@ -1,4 +1,4 @@
-# 🏢 Agentic SOV Intelligence System
+# Agentic SOV Intelligence System
 
 > **AI proposes. Code verifies. Humans approve. Everything is audited.**
 
@@ -52,7 +52,7 @@ Upload SOV File
 
 **Deliverables:** every run writes `outputs/Cleaned_SOV.xlsx` and `outputs/Audit_Log.xlsx` (the required names; overwritten by the latest run) plus timestamped copies `Cleaned_SOV_<session>_<time>.xlsx` / `Audit_Log_<session>_<time>.xlsx` as history. The UI also offers the column mappings as `Schema_Mapping.json`.
 
-The Streamlit UI runs Agents 1–3 through the compiled LangGraph `StateGraph`, which pauses (checkpointed) before the `human_review` node. **Apply Approved Transformations** writes the reviewed state back into that checkpoint and resumes the graph into `transform_export`. If no resumable checkpoint exists (for example after an app restart), the UI calls the same Agent 4 node directly.
+The Streamlit UI runs Agents 1-3 through the compiled LangGraph `StateGraph`, which pauses (checkpointed) before the `human_review` node. **Apply Approved Transformations** writes the reviewed state back into that checkpoint and resumes the graph into `transform_export`. If no resumable checkpoint exists (for example after an app restart), the UI calls the same Agent 4 node directly.
 
 ### Four Agents (Non-negotiable)
 
@@ -87,9 +87,16 @@ The Streamlit UI runs Agents 1–3 through the compiled LangGraph `StateGraph`, 
 
 ### Multi-sheet workbooks
 
-Every sheet that Agent 1 classifies as **Primary** is a data sheet. All data sheets are extracted with their own header row and stacked into **one** 17-column output (for `SOV_Q8B3.xlsx`: `23-24 Values`, `Deleted Locations` and `Insured Elsewhere`, 990 rows). Columns with the same header line up automatically. Differently named columns from different sheets (`2023 Building Value` on one sheet, `Building Value` on another) may both map to the same target, because their rows never overlap; within a single sheet, each target is still claimed by one column only. The Discovery section of the UI lists which sheets were merged.
+Every sheet that Agent 1 classifies as **Primary** is an independent data sheet. The pipeline preserves strict sheet isolation throughout the entire workflow:
+- **Sheet Discovery (Agent 1):** Scans and classifies all tabs, identifying every PRIMARY sheet and isolating its distinct header row.
+- **Isolated Per-Sheet Mapping & Quality (Agents 2 & 3):** Rather than concatenating tabs into a single DataFrame, each PRIMARY sheet is evaluated in its own context. Schema mappings, value-profile vetoes, and data quality checks run independently per sheet, preventing cross-sheet header collisions and data contamination.
+- **Review & Approval Gate (HITL):** The Streamlit UI provides intuitive Sheet Selectors allowing underwriters to inspect recommendations, data quality metrics, and unclaimed columns either per-sheet or across all sheets.
+- **Separate Outputs (Agent 4):** Each PRIMARY sheet is transformed and exported as its own validated 17-column Excel deliverable: `Cleaned_SOV_<sheet>.xlsx` accompanied by `Audit_Log_<sheet>.xlsx`. For example, in `SOV_Q8B3.xlsx`, the system produces:
+  - `Cleaned_SOV_23-24_Values.xlsx` (834 rows) + `Audit_Log_23-24_Values.xlsx`
+  - `Cleaned_SOV_Deleted_Locations.xlsx` (69 rows) + `Audit_Log_Deleted_Locations.xlsx`
+  - `Cleaned_SOV_Insured_Elsewhere.xlsx` (87 rows) + `Audit_Log_Insured_Elsewhere.xlsx`
+- **Single-Deliverable Compatibility:** For backward compatibility with automated evaluation harnesses and single-file workflows, `Cleaned_SOV.xlsx` and `Audit_Log.xlsx` are also exported matching the selected primary sheet deliverable (never a concatenated or corrupted dataset).
 
-> Merged rows carry no "source sheet" marker (an 18th column would break the schema). If a workbook has sheets such as "Deleted Locations", their rows are part of the output.
 
 ---
 
@@ -311,7 +318,7 @@ The four broker files `SOV_B4ID.xlsx`, `SOV_H6D2.xlsx`, `SOV_K4T9.xlsx` and `SOV
 | SOV_B4ID | SOV | 15 | 15 / 15 |
 | SOV_H6D2 | SOV | 19 | 15 / 15 |
 | SOV_K4T9 | Locations | 34 | 12 / 12 |
-| SOV_Q8B3 | 23-24 Values, Deleted Locations, Insured Elsewhere | 990 | 13 / 13 |
+| SOV_Q8B3 | 23-24 Values (834), Deleted Locations (69), Insured Elsewhere (87) | 834, 69, 87 (separate exports) | 13 / 13 |
 
 With every recommendation approved, validation still reports real problems in the source data instead of passing silently: `Storeys` 1.5 in B4ID (fractions are not truncated) and `Contents` "Included in Bldg" in Q8B3.
 
@@ -319,19 +326,19 @@ With every recommendation approved, validation still reports real problems in th
 
 ## Design Constraints (Non-Negotiable)
 
-1. ✅ Four distinct agents
-2. ✅ Shared typed Pydantic `SOVState`
-3. ✅ LLM never directly edits data
-4. ✅ Deterministic code performs transformations
-5. ✅ Human approval required before Agent 4
-6. ✅ Missing data is never fabricated (merged banners/footnotes are not copied into data cells; fractional integers are not truncated)
-7. ✅ Exactly 17 target columns
-8. ✅ Exact field names and ordering
-9. ✅ Full audit trail
-10. ✅ Low-confidence recommendations require individual review
-11. ✅ Rejection feedback triggers re-reasoning: an alternative is proposed, or the item is escalated to a human (bounded by `MAX_REREASON_ATTEMPTS`)
-12. ✅ No hardcoded API keys
-13. ✅ Malformed files fail gracefully
-14. ✅ Export locked until review complete
-15. ✅ Unclaimed source columns are surfaced in the Review tab: each can be manually assigned to a target field (space-merged if shared) or rejected (dropped before export)
-16. ✅ Review tab features 1-click column rejection (dropped from output), Change Target with persistent ChromaDB human feedback, and real-time Mapping Accuracy KPI
+1. Four distinct agents
+2. Shared typed Pydantic `SOVState`
+3. LLM never directly edits data
+4. Deterministic code performs transformations
+5. Human approval required before Agent 4
+6. Missing data is never fabricated (merged banners/footnotes are not copied into data cells; fractional integers are not truncated)
+7. Exactly 17 target columns
+8. Exact field names and ordering
+9. Full audit trail
+10. Low-confidence recommendations require individual review
+11. Rejection feedback triggers re-reasoning: an alternative is proposed, or the item is escalated to a human (bounded by `MAX_REREASON_ATTEMPTS`)
+12. No hardcoded API keys
+13. Malformed files fail gracefully
+14. Export locked until review complete
+15. Unclaimed source columns are surfaced in the Review tab: each can be manually assigned to a target field (space-merged if shared) or rejected (dropped before export)
+16. Review tab features 1-click column rejection (dropped from output), Change Target with persistent ChromaDB human feedback, and real-time Mapping Accuracy KPI

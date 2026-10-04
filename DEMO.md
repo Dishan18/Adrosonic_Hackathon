@@ -73,20 +73,20 @@ Optional (only if asked): the synthetic sample `data/samples/sample1_standard.xl
 
 | Time | Stage | Do | You should see | Say (short script) |
 |------|-------|----|----------------|--------------------|
-| 2:00 | 1 | Remove K4T9 (✕) → drag `SOV_Q8B3.xlsx` → **Run Pipeline** | Finishes in about 10 s (990 rows) | "A harder file: 8 tabs, three of them hidden, and the locations are split across three tabs." |
-| 2:20 | 1 | Tab **Sheet Detection** | Caption "3 data sheets merged into one output: 23-24 Values, Deleted Locations, Insured Elsewhere". Header row 0. Trailer, All Autos, Equipment (vehicle and equipment lists) → Secondary; Questions → Reject | "All three location tabs are merged into one 17-column output. The vehicle and equipment tabs are recognised as not-SOV." |
-| 2:50 | 3 | Tab **Data Quality** | Score 44.7 / 100 (grade D), **15 issues**, 5 critical. **Per-field completeness** bars (e.g. Reference 44.55%, Address 99.19%, City 0% "No source column"). Issue table with types: completeness, type_error (Contents "Included in Bldg"), logical_error (Year Built "1989 / 2012"), format (sprinkler codes "Yes"), duplicate (Reference) | "Agent 3's checks are deterministic, so recall is measurable: completeness per field, type errors, logical violations, formats and duplicates." |
-| 3:40 | 4 | Tab **Review** → expand groups | 30 recommendations. **Column mapping** `Map column 'Loc #' → 'Reference'` (83%). **Data correction** `Standardize construction year in 'Year Built'`: `1989 / 2012 → 1989`. **Standardisation** `Standardize sprinkler indicators in 'Fire Sprinklers (Y/N)'`: `Yes → Y` (95%) | "Every item has a plain-English why, an impact and a before/after. Nothing is applied yet." |
+| 2:00 | 1 | Remove K4T9 (✕) → drag `SOV_Q8B3.xlsx` → **Run Pipeline** | Finishes in about 10 s (3 primary sheets detected: `23-24 Values`, `Deleted Locations`, `Insured Elsewhere`) | "A harder file: 8 tabs, three of them hidden, and the locations are split across three tabs." |
+| 2:20 | 1 | Tab **Sheet Detection** | 3 primary data sheets detected and isolated: `23-24 Values` (834 rows), `Deleted Locations` (69 rows), `Insured Elsewhere` (87 rows). Header row 0. Trailer, All Autos, Equipment (vehicle and equipment lists) → Secondary; Questions → Reject | "All three location tabs are isolated into separate clean outputs rather than mashed together. The vehicle and equipment tabs are recognised as not-SOV." |
+| 2:50 | 3 | Tab **Data Quality** | Sheet selector dropdown to view each primary sheet independently. Score 44.7 / 100 for primary sheet, **15 issues**, 5 critical. **Per-field completeness** bars (e.g. Reference 44.55%, Address 99.19%, City 0% "No source column"). Issue table with types: completeness, type_error (Contents "Included in Bldg"), logical_error (Year Built "1989 / 2012"), format (sprinkler codes "Yes"), duplicate (Reference) | "Agent 3's checks are deterministic, so recall is measurable: completeness per field, type errors, logical violations, formats and duplicates." |
+| 3:40 | 4 | Tab **Review** → Sheet Filter: select **All Sheets** or individual sheets | Recommendations grouped with sheet tags. **Column mapping** `Map column 'Loc #' → 'Reference'` (83%). **Data correction** `Standardize construction year in 'Year Built'`: `1989 / 2012 → 1989`. **Standardisation** `Standardize sprinkler indicators in 'Fire Sprinklers (Y/N)'`: `Yes → Y` (95%) | "Every item has a plain-English why, an impact, a sheet badge, and a before/after. Nothing is applied yet." |
 | 4:40 | 5 | On the sprinkler card click **Approve** | Card turns *Approved* | "Accepting one recommendation." |
 | 5:00 | 5 | Card `Map column 'TOTAL' → 'Number of Buildings'` (60%) → **Reject** | Turns red: **Rejected (Column will be dropped)**; Mapping Accuracy KPI updates | "Clicking Reject directly drops the unwanted column from the final output without popups. If I wanted to remap it, 'Change Target' would store my correction directly into ChromaDB as human feedback." |
 | 6:00 | 5 | **Approve All High-Confidence (21 items ≥90%)** | Remaining review-required items stay pending | "Bulk approval only covers items at 90% or more; low-confidence items need a person." |
-| 6:20 | 5 | Approve the 6 remaining cards one by one: `Loc #`, `Building`, `2023 Building Value`, `2023 Contents Value`, `Building Value`, `Contents Value` | Banner "All required decisions complete. Ready for transformation." | "Building Value and 2023 Building Value come from different tabs, so both may feed Building Value." |
-| 6:40 | 5 | Scroll down: **Unclaimed Source Columns** expander | Shows unmapped source columns with sample values and **Assign / Reject** controls | "Any column left unmapped can be manually assigned to any of the 17 fields—merging with spaces if shared—or rejected to drop it cleanly." |
+| 6:20 | 5 | Approve the remaining cards one by one | Banner "All required decisions complete. Ready for transformation." | "Each sheet's columns are mapped independently to avoid header collisions across tabs." |
+| 6:40 | 5 | Scroll down: **Unclaimed Source Columns** expander (filtered by active sheet) | Shows unmapped source columns for the selected sheet with sample values and **Assign / Reject** controls | "Any column left unmapped can be manually assigned to any of the 17 fields or rejected to drop it cleanly." |
 | 7:00 | 6 | **Apply Approved Transformations** | Opens **Final Output** after about 5 s | "Agent 4 applies only approved, whitelisted operations; the LLM never touches data." |
-| 7:15 | 6 | Scroll: **Cleaned output** and **Audit Trail** (≈13 entries) | Audit rows such as `#Floor → Storeys column_rename` and `Year Built to_year_int · 1990 (sample; 374 rows changed)` | "Every rename and every operation is logged with before/after, confidence and who approved it." |
-| 8:00 | 7 | Top of Final Output: pills and **Schema conformance** table | **17 ✓** columns, exact names & order · **0 ✓** merged cell ranges · 990 data rows · type check per field (Zip int OK, Building Value float OK, Contents "1 non-numeric") | "Exactly 17 fields, in order, typed, no merged cells." |
+| 7:15 | 6 | Scroll: **Cleaned output** and **Audit Trail** | Sheet dropdown to switch between `23-24 Values` (834 rows), `Deleted Locations` (69 rows), and `Insured Elsewhere` (87 rows). Audit rows such as `#Floor → Storeys column_rename` | "Every rename and every operation is logged with before/after, confidence, sheet origin, and who approved it." |
+| 8:00 | 7 | Top of Final Output: pills and **Schema conformance** table | **17 ✓** columns, exact names & order · **0 ✓** merged cell ranges · per-field type checks | "Exactly 17 fields, in order, typed, no merged cells for every exported sheet." |
 | 8:30 | 7 | Banner **Validation Warning: Contents: 1 non-numeric value, 'Included in Bldg'** | | "This is deliberate honesty: one cell says 'Included in Bldg'. We never invent a number, and we don't hide the problem." |
-| 8:45 | 7 | **Download Cleaned_SOV.xlsx**, open it in Excel | Headers row 1, Zip shows `75219`; no merged cells | "Here is the deliverable, named exactly as required, with Audit_Log.xlsx next to it." |
+| 8:45 | 7 | Download buttons for each sheet: `Cleaned_SOV_23-24_Values.xlsx`, `Cleaned_SOV_Deleted_Locations.xlsx`, `Cleaned_SOV_Insured_Elsewhere.xlsx` (and backward-compatible `Cleaned_SOV.xlsx`) | Headers row 1, Zip shows `75219`; no merged cells | "Here are the separate deliverables for each primary sheet, plus Audit_Log for each." |
 | 9:30 | — | Wrap-up | | "AI proposes, code verifies, humans approve, everything is audited." |
 
 ---
@@ -97,7 +97,8 @@ Optional (only if asked): the synthetic sample `data/samples/sample1_standard.xl
 python -c "import openpyxl; ws=openpyxl.load_workbook(r'outputs\Cleaned_SOV.xlsx')['Cleaned_SOV']; print([c.value for c in ws[1]]); print('merged cells:', len(ws.merged_cells.ranges), '| rows:', ws.max_row-1)"
 ```
 
-Expected after Part B: the 17 headers in order, `merged cells: 0 | rows: 990`.
+Expected after Part B: the 17 headers in order, `merged cells: 0 | rows: 834` (and `outputs\Cleaned_SOV_23-24_Values.xlsx`, `Cleaned_SOV_Deleted_Locations.xlsx` [69 rows], `Cleaned_SOV_Insured_Elsewhere.xlsx` [87 rows] alongside matching audit logs).
+
 
 ## 6. If something goes wrong
 
@@ -118,7 +119,7 @@ Expected after Part B: the 17 headers in order, `merged cells: 0 | rows: 990`.
 | C-03 schema? | Exactly 17 fields in order, enforced and validated (Pandera + type check), 0 merged cells. |
 | C-04 four agents? | Discovery, Mapping, Quality & Reasoning, Transformation: separate LangGraph nodes sharing one typed `SOVState`, paused (checkpointed) before human review. |
 | C-05 explanations? | Every mapping and recommendation carries a rationale string, shown on its card and in the JSON. |
-| C-06 all samples? | All four broker files and the three synthetic samples run end to end without crashing (verified by hand; 92 automated tests cover the same code paths). |
+| C-06 all samples? | All four broker files and the three synthetic samples run end to end without crashing (verified by hand; 93 automated tests cover the same code paths). |
 | C-07 file names? | `outputs/Cleaned_SOV.xlsx` and `outputs/Audit_Log.xlsx`, plus timestamped history copies. |
 | Mapping accuracy? | 55 / 55 hand-labelled columns on the 4 real files; 100% on the synthetic benchmark (target ≥ 74%, baseline 53%). |
 | Anomaly recall? | 100% on the benchmark's planted anomalies (target ≥ 90%). |

@@ -378,7 +378,7 @@
           <tr>
             <td><strong>01</strong></td>
             <td><strong>Sheet Intelligence</strong></td>
-            <td>Unmerges ranges (fill down), detects headers via 4-factor scoring, classifies tabs; all PRIMARY tabs become data sheets</td>
+            <td>Unmerges ranges (fill down), detects headers via 4-factor scoring, classifies tabs; all PRIMARY tabs become independent data sheets</td>
             <td>Read-Only (Generates clean DataFrame)</td>
             <td><span class="badge-pill badge-green">100% Deterministic</span></td>
           </tr>
@@ -500,9 +500,9 @@
       </div>
 
       <div class="formula-box" style="border-left-color: var(--accent-purple);">
-        <div class="formula-title">Data Sheets (multi-tab merge)</div>
+        <div class="formula-title">Data Sheets (Multi-Sheet Isolation)</div>
         <div class="formula-desc">
-          The best-scoring PRIMARY sheet is <code>primary_sheet_name</code>. <strong>Every</strong> PRIMARY sheet is a data sheet: each is extracted with its own header row and the frames are stacked into one table (columns aligned by header name). For <code>SOV_Q8B3.xlsx</code> this merges <code>23-24 Values</code>, <code>Deleted Locations</code> and <code>Insured Elsewhere</code> into 990 rows. Hidden sheets are scored like any other.
+          The best-scoring PRIMARY sheet is designated <code>primary_sheet_name</code>. <strong>Every</strong> sheet classified as PRIMARY is treated as an independent data sheet: each is extracted with its own detected header row and processed in an isolated context (preventing cross-sheet column collisions). For <code>SOV_Q8B3.xlsx</code> this processes <code>23-24 Values</code> (834 rows), <code>Deleted Locations</code> (69 rows) and <code>Insured Elsewhere</code> (87 rows), exporting each as an independent 17-column workbook (<code>Cleaned_SOV_&lt;sheet&gt;.xlsx</code>) alongside matching audit logs. Hidden sheets are scored and unmerged like any other.
         </div>
       </div>
     </div>
@@ -619,7 +619,7 @@
           <ol style="margin-left: 20px; margin-top: 6px;">
             <li><strong>Pass 1:</strong> score every named column independently (no LLM).</li>
             <li><strong>Pass 2:</strong> repeatedly take the pending column with the highest current confidence. If its target is already claimed by a column from an overlapping sheet, re-score it with that target excluded and return it to the queue at its new confidence; otherwise commit it. A column still unresolved at its turn gets the LLM tier.</li>
-            <li>Targets are unique <strong>per sheet</strong>: columns from different merged sheets (never on the same row) may share a target, e.g. <code>2023 Building Value</code> and <code>Building Value</code>; Agent 4 coalesces them.</li>
+            <li>Targets are unique <strong>per sheet</strong>: each PRIMARY sheet maintains its own isolated mapping space, preventing column collisions across sheets.</li>
             <li>A final safety pass demotes any remaining same-sheet duplicate to <code>UNRESOLVED</code> with the reason in its rationale.</li>
           </ol>
           P = number of re-scorings (bounded by C &times; 17).
@@ -834,7 +834,7 @@ def apply_approved_transformations(df, approved_recs):
           1. <strong>Header Deduplication:</strong> During extraction, if header H appears k times the copies are named <code>H</code>, <code>H (1)</code>, <code>H (2)</code>, &hellip;<br>
           2. <strong>Series Slicing Disambiguation:</strong> If <code>isinstance(df[col], pd.DataFrame)</code> occurs at runtime, the agent evaluates <code>notna().sum()</code> across all candidate column slices and retains the slice with the most non-null values.<br>
           3. <strong>Stray Target Names:</strong> Any source column whose name equals a target field but whose own mapping was not approved (rejected, unreviewed or unmapped, e.g. a raw <code>State</code> column) is renamed to <code>_unmapped_{name}</code> before renaming, so it can never reach the output.<br>
-          4. <strong>Per-Sheet Coalescing:</strong> When columns from different merged sheets map to one target, <code>rename_and_coalesce</code> combines them into a single column (rows never overlap; the higher-confidence source wins if they ever do).
+          4. <strong>Per-Sheet Transformation:</strong> When a workbook has multiple PRIMARY data sheets, each sheet is transformed into its own dedicated 17-column output DataFrame, avoiding any data coalescence or cross-sheet interference.
         </div>
       </div>
     </div>

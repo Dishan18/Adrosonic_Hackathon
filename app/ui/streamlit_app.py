@@ -1187,10 +1187,17 @@ def render_unclaimed_section(state: SOVState, active_sheet: Optional[str] = None
             unsafe_allow_html=True,
         )
 
-        decisions: Dict[str, str] = st.session_state.get("unclaimed_decisions", {})
+        decisions: Dict[str, Any] = st.session_state.get("unclaimed_decisions", {})
 
         for col, s_name in unclaimed_items:
-            current = decisions.get(col, "")
+            # Look up current decision scoped by sheet
+            sheet_key = s_name or getattr(state, "primary_sheet_name", None) or "default"
+            current = ""
+            if sheet_key in decisions and isinstance(decisions[sheet_key], dict):
+                current = decisions[sheet_key].get(col, "")
+            elif isinstance(decisions.get(col), str):
+                current = decisions.get(col, "")
+
             key_suffix = f"_{s_name}_{col}" if s_name else f"_{col}"
             sheet_badge = f'<span style="background:#EBF5FF;color:#0071E3;font-size:11px;font-weight:600;padding:2px 6px;border-radius:4px;margin-right:6px;">📄 {s_name}</span>' if (s_name and active_sheet == "All Sheets") else ""
 
@@ -1243,19 +1250,26 @@ def render_unclaimed_section(state: SOVState, active_sheet: Optional[str] = None
 
             with col_assign_btn:
                 if st.button("Assign", key=f"uncl_assign{key_suffix}", disabled=(not chosen)):
-                    decisions[col] = chosen
+                    if sheet_key not in decisions or not isinstance(decisions[sheet_key], dict):
+                        decisions[sheet_key] = {}
+                    decisions[sheet_key][col] = chosen
                     st.session_state.unclaimed_decisions = decisions
                     st.rerun()
 
             with col_rej_btn:
                 if current == "__rejected__":
                     if st.button("Undo", key=f"uncl_undo{key_suffix}"):
-                        decisions.pop(col, None)
+                        if sheet_key in decisions and isinstance(decisions[sheet_key], dict):
+                            decisions[sheet_key].pop(col, None)
+                        elif col in decisions:
+                            decisions.pop(col, None)
                         st.session_state.unclaimed_decisions = decisions
                         st.rerun()
                 else:
                     if st.button("Reject", key=f"uncl_rej{key_suffix}"):
-                        decisions[col] = "__rejected__"
+                        if sheet_key not in decisions or not isinstance(decisions[sheet_key], dict):
+                            decisions[sheet_key] = {}
+                        decisions[sheet_key][col] = "__rejected__"
                         st.session_state.unclaimed_decisions = decisions
                         st.rerun()
 

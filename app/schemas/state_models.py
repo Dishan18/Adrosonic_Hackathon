@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -270,9 +270,9 @@ class SOVState(BaseModel):
     recommendations: List[Recommendation] = Field(default_factory=list)
 
     # --- Human decisions ---
-    decisions: List[HumanDecision] = Field(default_factory=list)
-    # Keys = unmapped source column names; values = TARGET_FIELDS name or "__rejected__"
-    unclaimed_decisions: Dict[str, str] = Field(default_factory=dict)
+    # Keys = sheet_name -> {unmapped_source_column_name: TARGET_FIELDS name or "__rejected__"}
+    # Also supports flat {column_name: decision} for backward compatibility.
+    unclaimed_decisions: Union[Dict[str, Dict[str, str]], Dict[str, str]] = Field(default_factory=dict)
 
     # --- Agent 4 outputs ---
     output_path: Optional[str] = None

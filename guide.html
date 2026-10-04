@@ -552,7 +552,7 @@
         <li><strong>Multi-Factor Sheet Scoring:</strong> 0.35 &times; header synonym matches + 0.25 &times; data density + 0.20 &times; type consistency + 0.20 &times; row volume.</li>
         <li><strong>Header Row Search:</strong> Scans the first 30 rows, scoring synonym matches, text ratio, fill ratio and numeric data below, to isolate the header row while skipping decorative titles.</li>
         <li><strong>Merged Cells:</strong> Each merged value is filled down its first column only; banners and footnotes merged across columns are never copied into data fields.</li>
-        <li><strong>Classification:</strong> Categorizes sheets into <code>PRIMARY</code>, <code>SECONDARY</code>, or <code>REJECT</code>. Every PRIMARY sheet is a data sheet, and all data sheets are merged into one output (e.g. three tabs of <code>SOV_Q8B3.xlsx</code>).</li>
+        <li><strong>Classification:</strong> Categorizes sheets into <code>PRIMARY</code>, <code>SECONDARY</code>, or <code>REJECT</code>. Every PRIMARY sheet is an independent data sheet, isolated immediately and exported as its own separate validated 17-column deliverable (e.g. three tabs of <code>SOV_Q8B3.xlsx</code> produce <code>Cleaned_SOV_23-24_Values.xlsx</code>, <code>Cleaned_SOV_Deleted_Locations.xlsx</code>, and <code>Cleaned_SOV_Insured_Elsewhere.xlsx</code>).</li>
       </ul>
     </div>
 
@@ -807,19 +807,22 @@
     sheet_manifest: Optional[SheetManifest] = None     # Agent 1
     header_row: int = 0
     primary_sheet_name: Optional[str] = None
-    data_sheets: List[str] = []                        # all PRIMARY sheets, merged
+    data_sheets: List[str] = []                        # all PRIMARY sheets, isolated
     mappings: Optional[MappingResult] = None           # Agent 2
     quality_report: Optional[QualityReport] = None     # Agent 3
     recommendations: List[Recommendation] = []
     decisions: List[HumanDecision] = []                # defined, not populated
-    output_path: Optional[str] = None                  # Agent 4
+    output_path: Optional[str] = None                  # Agent 4 (primary deliverable alias)
     audit_log_path: Optional[str] = None
+    output_paths: Dict[str, str] = {}                  # per-sheet cleaned export paths
+    audit_log_paths: Dict[str, str] = {}               # per-sheet audit log paths
     validation_passed: bool = False
     validation_errors: List[str] = []
+    sheet_states: Dict[str, Any] = {}                  # isolated per-sheet contexts
     stage: WorkflowStage = WorkflowStage.INIT
     error_message: Optional[str] = None
     audit_log: List[AuditEntry] = []
-    unclaimed_decisions: Dict[str, str] = {}           # Human decisions on unclaimed columns (assign/reject)
+    unclaimed_decisions: Dict[str, Dict[str, str]] = {} # Human decisions on unclaimed columns (assign/reject per sheet)
     session_id: str = ""
     re_reason_feedback: Optional[str] = None</code></pre>
     </div>
