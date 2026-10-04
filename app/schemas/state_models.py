@@ -209,6 +209,7 @@ class Recommendation(BaseModel):
     feedback_processed: bool = False  # True once Agent 3 has re-reasoned on rejection_note
     issue_id: Optional[str] = None
     review_required: bool = False  # True when confidence < HIGH_CONFIDENCE_THRESHOLD
+    sheet_name: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -276,10 +277,13 @@ class SOVState(BaseModel):
     # --- Agent 4 outputs ---
     output_path: Optional[str] = None
     audit_log_path: Optional[str] = None
+    output_paths: Dict[str, str] = Field(default_factory=dict)
+    audit_log_paths: Dict[str, str] = Field(default_factory=dict)
     validation_passed: bool = False
     validation_errors: List[str] = Field(default_factory=list)
 
-    # --- Orchestration ---
+    # --- Orchestration & Multi-sheet ---
+    sheet_states: Dict[str, SOVState] = Field(default_factory=dict)
     stage: WorkflowStage = WorkflowStage.INIT
     error_message: Optional[str] = None
     audit_log: List[AuditEntry] = Field(default_factory=list)

@@ -47,9 +47,12 @@ class SOVState(BaseModel):
     # Agent 4
     output_path: Optional[str] = None
     audit_log_path: Optional[str] = None
+    output_paths: Dict[str, str] = {}         # per-sheet cleaned export paths
+    audit_log_paths: Dict[str, str] = {}      # per-sheet audit log paths
     validation_passed: bool = False
     validation_errors: List[str] = []
-    # Orchestration
+    # Orchestration & Multi-sheet
+    sheet_states: Dict[str, Any] = {}         # isolated per-sheet contexts
     stage: WorkflowStage = WorkflowStage.INIT
     error_message: Optional[str] = None
     audit_log: List[AuditEntry] = []
@@ -154,8 +157,8 @@ class Recommendation(BaseModel):
 1. **Parse once:** `_parse_workbook(path, mtime)` loads the workbook with `openpyxl.load_workbook(data_only=True)` and converts every sheet to a DataFrame. It is `lru_cache`d per (resolved path, modification time), so the agents share one parse.
 2. **Unmerge (fill down):** for each merged range the top-left value is written into the first column of every row of the range. Horizontal spans (banners such as "2023 - 2024 Values", footnotes merged across `B:AB`) are therefore *not* copied into other columns.
 3. **Extract (`extract_data_frame`):** the header row becomes the column names (line breaks collapsed to spaces, blank names → `_col_{i}`, duplicates suffixed ` (1)`, ` (2)` …). Then these rows are dropped: completely blank rows; rows containing a cell equal to `total`, `grand total`, `subtotal`, `sum` or `footer`; note rows (exactly one non-empty cell, and it is non-numeric text); whitespace-only rows.
-4. **Multi-sheet load (`load_source_data(state)`):** every sheet in `state.data_sheets` is extracted with its own header row and the frames are concatenated (columns aligned by name). `DataFrame.attrs["column_sheets"]` records which sheet(s) each column came from.
-5. **`rename_and_coalesce(df, pairs)`:** renames source columns to targets; when several sources map to one target (one per sheet) they are combined into one column, earlier (higher-confidence) pairs winning where both have a value.
+4. **Per-sheet isolation & extraction (`load_single_sheet_data` / `load_source_data`):** each sheet is extracted independently with its own confirmed header row. When multiple PRIMARY sheets exist, each sheet is assigned an isolated processing context (`sheet_state`), preventing data concatenation or cross-sheet profiling contamination.
+5. **`rename_and_coalesce(df, pairs)`:** renames source columns to targets; preserves 1:1 mapping within each sheet context.
 
 ### 2.1 Agent 1: Sheet Intelligence & Discovery (`app.agents.sheet_discovery`)
 
@@ -163,7 +166,7 @@ class Recommendation(BaseModel):
 1. Load all worksheets (`load_workbook_sheets`) and the unmerged view of each.
 2. Scan the first $M = 30$ rows to locate the header row (`_find_best_header`).
 3. Compute a composite structural score and classify each sheet.
-4. Pick the best PRIMARY sheet as `primary_sheet_name`; set `data_sheets` = that sheet followed by every other PRIMARY sheet.
+4. Identify all PRIMARY sheets. If multiple PRIMARY sheets exist, construct isolated per-sheet processing contexts (`state.sheet_states`) immediately after discovery so schema mapping, quality profiling, HITL, transformation, and validation run independently per sheet.
 
 #### Algorithmic Formulation:
 For candidate header row $i \in [0, \min(30, N_{\text{rows}}))$:
@@ -361,8 +364,11 @@ schema = pa.DataFrameSchema(
 
 1. **Ordering & Padding (`enforce_column_order`):** missing canonical columns are added empty; extra columns are dropped.
 2. **Validation (`validate_output_schema`):** exactly 17 columns, exact names and order, the Pandera schema above, and **type conformance**: every non-null value of `Building Value`, `Contents`, `BI`, `Other` must be numeric, and of `Zip`, `Storeys`, `Number of Buildings`, `Year Built` integral. Each failure is reported as e.g. `Storeys: 1 non-integer value(s), e.g. 1.5`.
-3. **Serialization:** `Cleaned_SOV_{session}_{timestamp}.xlsx` via openpyxl, copied to `Cleaned_SOV.xlsx` (and the audit log to `Audit_Log.xlsx`) in `OUTPUT_DIR`; the written file is re-opened and any merged cell range is a validation error; numeric `Zip` cells get number format `00000`. Files are written even when validation fails (stage `VALIDATING`), so the reviewer can see the problems.
-4. **Audit Register:** `Audit_Log_{session}_{timestamp}.xlsx`.
+3. **Serialization:**
+   - **Single PRIMARY sheet:** Exported to `Cleaned_SOV.xlsx` and `Audit_Log.xlsx` in `OUTPUT_DIR`.
+   - **Multiple PRIMARY sheets:** Each PRIMARY sheet is transformed independently and exported as `Cleaned_SOV_<sheet>.xlsx` and `Audit_Log_<sheet>.xlsx` (e.g., `Cleaned_SOV_23-24_Values.xlsx`, `Cleaned_SOV_Deleted_Locations.xlsx`). For compatibility, `Cleaned_SOV.xlsx` and `Audit_Log.xlsx` are maintained as explicit aliases to the selected primary deliverable without merging datasets.
+   - Merged cell check: The written file is verified to have 0 merged cells. Numeric `Zip` cells receive the number format `00000`.
+4. **Audit Register:** `Audit_Log_{session}_{timestamp}.xlsx` and per-sheet deliverable logs.
 
 ---
 

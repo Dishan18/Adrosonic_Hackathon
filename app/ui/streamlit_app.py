@@ -718,7 +718,30 @@ def render_review_section(state: SOVState):
         st.info("No recommendations generated for this dataset.")
         return
 
-    recs = state.recommendations
+    active_sheet_filter = "All Sheets"
+    if getattr(state, "sheet_states", None) and len(state.sheet_states) > 1:
+        st.markdown(
+            """
+            <div style="font-size:13px;font-weight:600;color:#1D1D1F;margin-bottom:6px;">
+                Multiple PRIMARY Sheets Detected & Isolated
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        sheet_options = ["All Sheets"] + list(state.sheet_states.keys())
+        active_sheet_filter = st.selectbox(
+            "Filter Review by Sheet:",
+            sheet_options,
+            index=0,
+            key="active_review_sheet_filter",
+        )
+
+    all_recs = state.recommendations
+    if active_sheet_filter != "All Sheets":
+        recs = [r for r in all_recs if getattr(r, "sheet_name", None) == active_sheet_filter]
+    else:
+        recs = all_recs
+
     pending = [r for r in recs if r.status == RecommendationStatus.PENDING]
     approved = [r for r in recs if r.status == RecommendationStatus.APPROVED]
     rejected = [r for r in recs if r.status == RecommendationStatus.REJECTED]
@@ -890,12 +913,15 @@ def _render_recommendation_card(state: SOVState, rec: Recommendation):
     conf_pct = f"{rec.confidence:.0%}"
     conf_cls = "badge-green" if rec.confidence >= 0.90 else "badge-amber" if rec.confidence >= 0.70 else "badge-red"
 
+    sheet_badge = f'<span style="background:#EBF5FF;color:#0071E3;font-size:11px;font-weight:600;padding:2px 6px;border-radius:4px;margin-right:6px;">📄 {rec.sheet_name}</span>' if getattr(rec, "sheet_name", None) else ""
+
     st.markdown(
         f"""
         <div class="surface-card">
             <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px;">
                 <div>
                     <span style="font-family:monospace;font-size:11px;color:#6B7280;margin-right:6px;">{rec.id}</span>
+                    {sheet_badge}
                     <strong style="font-size:14px;color:#111827;">{details['title']}</strong>
                 </div>
                 <div style="display:flex;gap:6px;align-items:center;">
@@ -1004,12 +1030,22 @@ def _render_recommendation_card(state: SOVState, rec: Recommendation):
     st.markdown("</div>", unsafe_allow_html=True)
 
 
+def _sync_substate_rec(state: SOVState, rec_id: str, update_dict: dict):
+    if getattr(state, "sheet_states", None):
+        for s_state in state.sheet_states.values():
+            for j, r in enumerate(s_state.recommendations):
+                if r.id == rec_id:
+                    s_state.recommendations[j] = r.model_copy(update=update_dict)
+                    return
+
+
 def _approve_recommendation(state: SOVState, rec_id: str):
     for i, rec in enumerate(state.recommendations):
         if rec.id == rec_id:
             state.recommendations[i] = rec.model_copy(
                 update={"status": RecommendationStatus.APPROVED}
             )
+            _sync_substate_rec(state, rec_id, {"status": RecommendationStatus.APPROVED})
             if rec.action_type == ActionType.COLUMN_MAPPING:
                 try:
                     from app.services.memory.chroma_store import store_approved_mapping
@@ -1030,6 +1066,7 @@ def _revert_recommendation(state: SOVState, rec_id: str):
             state.recommendations[i] = rec.model_copy(
                 update={"status": RecommendationStatus.PENDING}
             )
+            _sync_substate_rec(state, rec_id, {"status": RecommendationStatus.PENDING})
             break
 
 
@@ -1037,13 +1074,13 @@ def _reject_recommendation(state: SOVState, rec_id: str, note: str = ""):
     for i, rec in enumerate(state.recommendations):
         if rec.id == rec_id:
             new_count = rec.re_reason_count + 1
-            state.recommendations[i] = rec.model_copy(
-                update={
-                    "status": RecommendationStatus.REJECTED,
-                    "rejection_note": note,
-                    "re_reason_count": new_count,
-                }
-            )
+            update_dict = {
+                "status": RecommendationStatus.REJECTED,
+                "rejection_note": note,
+                "re_reason_count": new_count,
+            }
+            state.recommendations[i] = rec.model_copy(update=update_dict)
+            _sync_substate_rec(state, rec_id, update_dict)
             if note and new_count < config.MAX_REREASON_ATTEMPTS:
                 state.re_reason_feedback = f"Recommendation {rec_id} rejected: {note}"
                 _run_rereason(state)
@@ -1053,14 +1090,14 @@ def _reject_recommendation(state: SOVState, rec_id: str, note: str = ""):
 def _edit_and_approve_recommendation(state: SOVState, rec_id: str, new_target: str):
     for i, rec in enumerate(state.recommendations):
         if rec.id == rec_id:
-            state.recommendations[i] = rec.model_copy(
-                update={
-                    "target_column": new_target,
-                    "status": RecommendationStatus.APPROVED,
-                    "uncertainty": "User manually assigned target (saved as human feedback).",
-                    "confidence": 1.0,
-                }
-            )
+            update_payload = {
+                "target_column": new_target,
+                "status": RecommendationStatus.APPROVED,
+                "uncertainty": "User manually assigned target (saved as human feedback).",
+                "confidence": 1.0,
+            }
+            state.recommendations[i] = rec.model_copy(update=update_payload)
+            _sync_substate_rec(state, rec_id, update_payload)
             # Sync internal state.mappings if available
             if state.mappings and getattr(state.mappings, "mappings", None):
                 for m in state.mappings.mappings:
@@ -1112,7 +1149,17 @@ def render_unclaimed_section(state: SOVState):
     if state.mappings is None:
         return
 
-    unclaimed_cols = state.mappings.unmapped_source_columns
+    if getattr(state, "sheet_states", None) and len(state.sheet_states) > 1:
+        unclaimed_cols = []
+        seen = set()
+        for s_state in state.sheet_states.values():
+            if s_state.mappings and s_state.mappings.unmapped_source_columns:
+                for c in s_state.mappings.unmapped_source_columns:
+                    if c not in seen:
+                        seen.add(c)
+                        unclaimed_cols.append(c)
+    else:
+        unclaimed_cols = state.mappings.unmapped_source_columns
     if not unclaimed_cols:
         return
 
@@ -1249,7 +1296,19 @@ def render_mapping_section(state: SOVState):
         st.info("Schema mapping data not available.")
         return
 
-    result = state.mappings
+    active_state = state
+    if getattr(state, "sheet_states", None) and len(state.sheet_states) > 1:
+        selected_sheet = st.selectbox(
+            "Select Sheet for Schema Mapping:",
+            list(state.sheet_states.keys()),
+            key="mapping_active_sheet",
+        )
+        active_state = state.sheet_states.get(selected_sheet, state)
+
+    result = active_state.mappings
+    if result is None:
+        st.info("Schema mapping data not available for this sheet.")
+        return
     mapped = [m for m in result.mappings if m.target]
     high_conf = sum(1 for m in result.mappings if m.confidence >= 0.90)
 
@@ -1376,9 +1435,22 @@ def render_quality_section(state: SOVState):
         st.info("Quality report not available.")
         return
 
-    qr = state.quality_report
+    active_state = state
+    if getattr(state, "sheet_states", None) and len(state.sheet_states) > 1:
+        selected_sheet = st.selectbox(
+            "Select Sheet for Quality Assessment:",
+            list(state.sheet_states.keys()),
+            key="quality_active_sheet",
+        )
+        active_state = state.sheet_states.get(selected_sheet, state)
+
+    qr = active_state.quality_report
+    if qr is None:
+        st.info("Quality report not available for this sheet.")
+        return
+
     from app.services.scoring.quality_score import compute_sov_quality_score, score_summary
-    score = compute_sov_quality_score(qr, state.mappings)
+    score = compute_sov_quality_score(qr, active_state.mappings)
     summary = score_summary(score)
     critical_count = sum(1 for i in qr.issues if i.severity == "high")
 
@@ -1541,34 +1613,80 @@ def render_export_section(state: SOVState):
         )
 
     # Downloads
-    c1, c2 = st.columns(2)
+    if getattr(state, "output_paths", None) and len(state.output_paths) > 1:
+        st.markdown(
+            """
+            <div style="font-size:14px;font-weight:600;color:#1D1D1F;margin-bottom:12px;">
+                Exported Sheets (Separate Cleaned Workbooks & Audit Logs)
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        for s_name, out_p in state.output_paths.items():
+            audit_p = state.audit_log_paths.get(s_name)
+            p_out = Path(out_p)
+            st.markdown(f"**📄 Sheet: {s_name}** (`{p_out.name}`)")
+            c1, c2 = st.columns(2)
+            with c1:
+                if p_out.exists():
+                    with open(p_out, "rb") as f:
+                        data = f.read()
+                    st.download_button(
+                        label=f"Download {p_out.name}",
+                        data=data,
+                        file_name=p_out.name,
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key=f"dl_sov_{s_name}",
+                    )
+            with c2:
+                if audit_p and Path(audit_p).exists():
+                    with open(audit_p, "rb") as f:
+                        audit_data = f.read()
+                    st.download_button(
+                        label=f"Download {Path(audit_p).name}",
+                        data=audit_data,
+                        file_name=Path(audit_p).name,
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key=f"dl_audit_{s_name}",
+                    )
+            st.markdown("<hr style='margin:12px 0;border:none;border-top:1px solid #E5E7EB;'>", unsafe_allow_html=True)
+    else:
+        c1, c2 = st.columns(2)
+        with c1:
+            if state.output_path and Path(state.output_path).exists():
+                with open(state.output_path, "rb") as f:
+                    data = f.read()
+                st.download_button(
+                    label="Download Cleaned_SOV.xlsx",
+                    data=data,
+                    file_name="Cleaned_SOV.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="dl_sov_btn",
+                )
+        with c2:
+            if state.audit_log_path and Path(state.audit_log_path).exists():
+                with open(state.audit_log_path, "rb") as f:
+                    audit_data = f.read()
+                st.download_button(
+                    label="Download Audit_Log.xlsx",
+                    data=audit_data,
+                    file_name="Audit_Log.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="dl_audit_btn",
+                )
 
-    with c1:
-        if state.output_path and Path(state.output_path).exists():
-            with open(state.output_path, "rb") as f:
-                data = f.read()
-            st.download_button(
-                label="Download Cleaned_SOV.xlsx",
-                data=data,
-                file_name="Cleaned_SOV.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                key="dl_sov_btn",
-            )
+    # Conformance & preview
+    active_output_path = state.output_path
+    if getattr(state, "output_paths", None) and len(state.output_paths) > 1:
+        selected_preview_sheet = st.selectbox(
+            "Select Exported Sheet for Conformance & Data Preview:",
+            list(state.output_paths.keys()),
+            key="preview_active_sheet",
+        )
+        active_output_path = state.output_paths.get(selected_preview_sheet, state.output_path)
 
-    with c2:
-        if state.audit_log_path and Path(state.audit_log_path).exists():
-            with open(state.audit_log_path, "rb") as f:
-                audit_data = f.read()
-            st.download_button(
-                label="Download Audit_Log.xlsx",
-                data=audit_data,
-                file_name="Audit_Log.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                key="dl_audit_btn",
-            )
-
-    if state.output_path and Path(state.output_path).exists():
-        _render_schema_conformance(state.output_path)
+    if active_output_path and Path(active_output_path).exists():
+        _render_schema_conformance(active_output_path)
 
     # Audit Trail summary
     if state.audit_log:

@@ -870,6 +870,26 @@ def run_quality_reasoning(state: SOVState) -> SOVState:
         state.stage = WorkflowStage.ERROR
         return state
 
+    # If multiple PRIMARY sheets were discovered, run quality reasoning independently for each sheet
+    if getattr(state, "sheet_states", None) and len(state.sheet_states) > 1:
+        logger.info("Agent 3: Assessing quality across %d sheets independently.", len(state.sheet_states))
+        aggregated_recs = []
+        for s_name, sub_state in list(state.sheet_states.items()):
+            sub_state.file_meta = state.file_meta
+            sub_state.sheet_manifest = state.sheet_manifest
+            sub_state.re_reason_feedback = state.re_reason_feedback
+            assessed_sub = run_quality_reasoning(sub_state)
+            state.sheet_states[s_name] = assessed_sub
+            for r in assessed_sub.recommendations:
+                aggregated_recs.append(r.model_copy(update={"sheet_name": s_name}))
+
+        primary_name = state.primary_sheet_name or next(iter(state.sheet_states))
+        state.quality_report = state.sheet_states[primary_name].quality_report
+        state.recommendations = aggregated_recs
+        state.stage = WorkflowStage.ASSESSED
+        state.re_reason_feedback = None
+        return state
+
     # Re-reasoning on rejected items (with reviewer feedback) happens first,
     # because a rejected mapping may be replaced and that changes the data view
     rejected = _rejections_to_rereason(state)

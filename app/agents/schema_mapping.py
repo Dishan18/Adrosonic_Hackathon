@@ -640,7 +640,21 @@ def run_schema_mapping(state: SOVState) -> SOVState:
         state.stage = WorkflowStage.ERROR
         return state
 
-    # Load cleaned DataFrame (all data sheets, stacked)
+    # If multiple PRIMARY sheets were discovered, run mapping independently for each sheet
+    if getattr(state, "sheet_states", None) and len(state.sheet_states) > 1:
+        logger.info("Agent 2: Mapping %d sheets independently.", len(state.sheet_states))
+        for s_name, sub_state in list(state.sheet_states.items()):
+            sub_state.file_meta = state.file_meta
+            sub_state.sheet_manifest = state.sheet_manifest
+            mapped_sub = run_schema_mapping(sub_state)
+            state.sheet_states[s_name] = mapped_sub
+
+        primary_name = state.primary_sheet_name or next(iter(state.sheet_states))
+        state.mappings = state.sheet_states[primary_name].mappings
+        state.stage = WorkflowStage.MAPPED
+        return state
+
+    # Load cleaned DataFrame for this sheet
     try:
         data_df = load_source_data(state)
     except Exception as e:

@@ -358,17 +358,33 @@ def run_sheet_discovery(state: SOVState) -> SOVState:
     state.sheet_manifest = manifest
     state.header_row = primary.header_row
     state.primary_sheet_name = primary.sheet_name
-    # Every sheet classified Primary is SOV location data; they are merged into
-    # one output. The best-scoring sheet comes first.
+    # All sheets classified Primary are SOV location data
     state.data_sheets = [primary.sheet_name] + [
         r.sheet_name for r in results
         if r.classification == SheetClassification.PRIMARY and r.sheet_name != primary.sheet_name
     ]
+
+    # Create independent per-sheet processing contexts immediately after discovery
+    header_rows = {s.sheet_name: s.header_row for s in manifest.sheets}
+    state.sheet_states = {}
+    if len(state.data_sheets) > 1:
+        for sheet_name in state.data_sheets:
+            h_row = header_rows.get(sheet_name, 0)
+            state.sheet_states[sheet_name] = SOVState(
+                file_meta=state.file_meta,
+                sheet_manifest=manifest,
+                header_row=h_row,
+                primary_sheet_name=sheet_name,
+                data_sheets=[sheet_name],
+                stage=WorkflowStage.DISCOVERED,
+                session_id=f"{state.session_id}_{sheet_name}" if state.session_id else sheet_name,
+            )
+
     state.stage = WorkflowStage.DISCOVERED
 
     logger.info(
-        "Agent 1 complete. Primary sheet: '%s', header row: %d, confidence: %.3f. Data sheets: %s",
-        primary.sheet_name, primary.header_row, primary.confidence, state.data_sheets,
+        "Agent 1 complete. Primary sheet: '%s', header row: %d, confidence: %.3f. Data sheets: %s (isolated contexts: %d)",
+        primary.sheet_name, primary.header_row, primary.confidence, state.data_sheets, len(state.sheet_states),
     )
     return state
 

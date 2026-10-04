@@ -355,15 +355,27 @@ def profile_dataframe(df: pd.DataFrame) -> Dict:
     }
 
 
+def load_single_sheet_data(path: str, sheet_name: str, header_row: int = 0) -> pd.DataFrame:
+    """
+    Extract an isolated sheet's data as a DataFrame using unmerge_and_forward_fill
+    and its designated header row.
+    """
+    df = unmerge_and_forward_fill(path, sheet_name)
+    if df.empty:
+        df = load_workbook_sheets(path).get(sheet_name, pd.DataFrame())
+    if df.empty:
+        return pd.DataFrame()
+    data = extract_data_frame(df, header_row)
+    if not data.empty:
+        data.attrs["column_sheets"] = {col: [sheet_name] for col in data.columns}
+    return data
+
+
 def load_source_data(state) -> pd.DataFrame:
     """
-    Load the SOV data rows for a pipeline state as one DataFrame.
-
-    Every sheet Agent 1 classified as a data sheet (state.data_sheets) is
-    extracted with its own header row and the results are stacked, so a
-    workbook that splits locations across tabs produces one combined output.
-    Columns are aligned by header name. Falls back to the single primary sheet
-    for states created before data_sheets existed.
+    Load the SOV data rows for a pipeline state as a DataFrame.
+    When a sheet is processed independently (or in single-sheet workbooks),
+    this extracts only that sheet's data without concatenation.
     """
     if state.file_meta is None:
         return pd.DataFrame()
@@ -374,17 +386,12 @@ def load_source_data(state) -> pd.DataFrame:
         header_rows = {s.sheet_name: s.header_row for s in state.sheet_manifest.sheets}
     primary = state.primary_sheet_name or ""
     names = list(state.data_sheets) or [primary]
-    specs = [(n, state.header_row if n == primary else header_rows.get(n, 0)) for n in names]
+    specs = [(n, state.header_row if n == primary else header_rows.get(n, 0)) for n in names if n]
 
     frames = []
     column_sheets: Dict[str, List[str]] = {}
     for name, header_row in specs:
-        df = unmerge_and_forward_fill(path, name)
-        if df.empty:
-            df = load_workbook_sheets(path).get(name, pd.DataFrame())
-        if df.empty:
-            continue
-        data = extract_data_frame(df, header_row)
+        data = load_single_sheet_data(path, name, header_row)
         if not data.empty:
             frames.append(data)
             for col in data.columns:
@@ -393,8 +400,6 @@ def load_source_data(state) -> pd.DataFrame:
     if not frames:
         return pd.DataFrame()
     combined = frames[0] if len(frames) == 1 else pd.concat(frames, ignore_index=True, sort=False)
-    # Sheets name the same field differently ("2023 Building Value" vs
-    # "Building Value"); mapping uses this to allow one target per sheet.
     combined.attrs["column_sheets"] = column_sheets
     return combined
 

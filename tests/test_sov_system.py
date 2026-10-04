@@ -1044,7 +1044,7 @@ class TestRealWorldRegressions:
         assert got["Country Name"] == "Country"          # not blocked by Latitude
         assert got["Latitude"] not in ("Country", "Reference")
 
-    def test_multiple_data_sheets_merged_into_one_output(self, tmp_path):
+    def test_multiple_data_sheets_processed_and_exported_separately(self, tmp_path):
         header_a = ["Loc #", "Address", "Zip", "2023 Building Value", "Yr Built"]
         header_b = ["Loc #", "Address", "Zip", "Building Value", "Yr Built"]
         sheet_a = [header_a] + [[i, f"{i} Main St", 75201, 100000 + i, 1990] for i in range(1, 8)]
@@ -1053,14 +1053,32 @@ class TestRealWorldRegressions:
 
         state, out = _run_all_approved(path)
         assert set(state.data_sheets) == {"Current", "Deleted"}
-        assert list(out.columns) == [
+
+        # Independent outputs per PRIMARY sheet
+        assert "Current" in state.output_paths
+        assert "Deleted" in state.output_paths
+        out_current = pd.read_excel(state.output_paths["Current"])
+        out_deleted = pd.read_excel(state.output_paths["Deleted"])
+
+        expected_cols = [
             "Reference", "Address", "City", "State", "Zip", "County", "Country",
             "Building Value", "Contents", "BI", "Occupancy", "Construction",
             "Storeys", "Number of Buildings", "Year Built", "Fire Sprinklers (Y/N)", "Other",
         ]
-        assert len(out) == 13
-        # Differently named value columns from each sheet both land in Building Value
-        assert out["Building Value"].notna().sum() == 13
+        assert list(out_current.columns) == expected_cols
+        assert list(out_deleted.columns) == expected_cols
+
+        # Each sheet is processed and sized independently (not merged into 13 rows)
+        assert len(out_current) == 7
+        assert len(out_deleted) == 6
+        assert out_current["Building Value"].notna().sum() == 7
+        assert out_deleted["Building Value"].notna().sum() == 6
+
+        # Audit logs are generated per sheet
+        assert "Current" in state.audit_log_paths
+        assert "Deleted" in state.audit_log_paths
+        assert Path(state.output_paths["Current"]).name == "Cleaned_SOV_Current.xlsx"
+        assert Path(state.output_paths["Deleted"]).name == "Cleaned_SOV_Deleted.xlsx"
 
     def test_rejected_same_name_column_does_not_leak(self, tmp_path):
         from app.agents.transformation import run_transformation

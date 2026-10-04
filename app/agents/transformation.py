@@ -13,9 +13,10 @@ The LLM NEVER touches this agent. Pure deterministic code.
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import pandas as pd
 
@@ -331,44 +332,42 @@ def _apply_approved_transformations(
     return df, audit_entries
 
 
-def run_transformation(state: SOVState) -> SOVState:
+def _clean_sheet_name(sheet_name: str) -> str:
+    cleaned = re.sub(r'[^\w\-.]+', '_', sheet_name.strip())
+    return cleaned.strip('_')
+
+
+def _execute_transformation_on_state(
+    state: SOVState,
+    sheet_suffix: Optional[str] = None,
+) -> SOVState:
     """
-    LangGraph node: Agent 4 — Controlled Transformation.
-    Reads: state (all previous stages)
-    Writes: state.output_path, state.audit_log_path, state.validation_passed, state.audit_log
+    Execute transformation and schema validation on a single sheet context.
+    If sheet_suffix is provided, files are named Cleaned_SOV_{sheet_suffix}.xlsx.
+    Otherwise, standard names Cleaned_SOV.xlsx are used.
     """
-    logger.info("Agent 4: Controlled Transformation starting.")
     state = state.model_copy(deep=True)
     state.stage = WorkflowStage.TRANSFORMING
 
-    # Safety check: ensure all low-confidence recs have decisions
     if state.mappings is None:
         state.error_message = "No mappings available for transformation."
         state.stage = WorkflowStage.ERROR
         return state
 
-    # Get only approved recommendations
     approved_recs = [
         r for r in state.recommendations
         if r.status == RecommendationStatus.APPROVED
     ]
+    logger.info("Applying %d approved recommendations for sheet '%s'.", len(approved_recs), sheet_suffix or "default")
 
-    logger.info("Applying %d approved recommendations.", len(approved_recs))
-
-    # Load source data
     source_df = _load_source_df(state)
     if source_df is None or source_df.empty:
         state.error_message = "Could not load source data for transformation."
         state.stage = WorkflowStage.ERROR
         return state
 
-    # Apply transformations (pass state so unclaimed_decisions are processed)
     transformed_df, audit_entries = _apply_approved_transformations(source_df, approved_recs, state=state)
-
-    # Enforce 17-column schema
     final_df = enforce_column_order(transformed_df)
-
-    # Validate output
     passed, validation_errors = validate_output_schema(final_df)
 
     if not passed:
@@ -376,79 +375,158 @@ def run_transformation(state: SOVState) -> SOVState:
         state.validation_passed = False
         state.validation_errors = validation_errors
         state.stage = WorkflowStage.VALIDATING
-        # Still save audit log but not the cleaned SOV
     else:
         logger.info("Output validation passed.")
         state.validation_passed = True
         state.validation_errors = []
 
-    # Export Cleaned_SOV.xlsx
     output_dir = Path(config.OUTPUT_DIR)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     session = state.session_id or "default"
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    cleaned_path = str(output_dir / f"Cleaned_SOV_{session}_{ts}.xlsx")
-    audit_path = str(output_dir / f"Audit_Log_{session}_{ts}.xlsx")
+    prefix = f"_{sheet_suffix}" if sheet_suffix else ""
+    cleaned_path = str(output_dir / f"Cleaned_SOV{prefix}_{session}_{ts}.xlsx")
+    audit_path = str(output_dir / f"Audit_Log{prefix}_{session}_{ts}.xlsx")
+    deliverable_cleaned_name = f"Cleaned_SOV{prefix}.xlsx"
+    deliverable_audit_name = f"Audit_Log{prefix}.xlsx"
 
-    # Convert to object dtype to preserve nulls cleanly
     for col in final_df.columns:
         final_df[col] = final_df[col].where(final_df[col].notna(), other=None)
 
     try:
         with pd.ExcelWriter(cleaned_path, engine="openpyxl") as writer:
             final_df.to_excel(writer, sheet_name="Cleaned_SOV", index=False)
-            # Zip is an integer field; show leading zeros (802 → 00802)
             ws = writer.sheets["Cleaned_SOV"]
             zip_col = TARGET_COLUMN_ORDER.index("Zip") + 1
             for (cell,) in ws.iter_rows(min_row=2, min_col=zip_col, max_col=zip_col):
                 if isinstance(cell.value, (int, float)) and not isinstance(cell.value, bool):
                     cell.number_format = "00000"
-        logger.info("Cleaned_SOV.xlsx saved: %s", cleaned_path)
+        logger.info("%s saved: %s", deliverable_cleaned_name, cleaned_path)
     except Exception as e:
-        state.error_message = f"Failed to write Cleaned_SOV.xlsx: {e}"
+        state.error_message = f"Failed to write {deliverable_cleaned_name}: {e}"
         state.stage = WorkflowStage.ERROR
         return state
 
-    # Export Audit_Log.xlsx
     try:
         export_audit_log_xlsx(audit_entries, audit_path)
     except Exception as e:
         logger.error("Audit log export failed: %s", e)
 
-    # Schema conformance of the written file: no merged cells
     try:
         import openpyxl
         merged = len(openpyxl.load_workbook(cleaned_path)["Cleaned_SOV"].merged_cells.ranges)
         if merged:
             passed = False
-            validation_errors.append(f"Cleaned_SOV.xlsx contains {merged} merged cell range(s).")
+            validation_errors.append(f"{deliverable_cleaned_name} contains {merged} merged cell range(s).")
             state.validation_passed = False
             state.validation_errors = validation_errors
     except Exception as e:
         logger.warning("Merged-cell check on output failed: %s", e)
 
-    # Required deliverable names (Cleaned_SOV.xlsx / Audit_Log.xlsx) next to the
-    # timestamped copies, which are kept as history
     import shutil
-    for src, name in ((cleaned_path, "Cleaned_SOV.xlsx"), (audit_path, "Audit_Log.xlsx")):
+    deliverable_cleaned_path = output_dir / deliverable_cleaned_name
+    deliverable_audit_path = output_dir / deliverable_audit_name
+    for src, dst in ((cleaned_path, deliverable_cleaned_path), (audit_path, deliverable_audit_path)):
         try:
             if Path(src).exists():
-                shutil.copyfile(src, output_dir / name)
-        except Exception as e:  # e.g. the previous copy is open in Excel
-            logger.warning("Could not write %s: %s", name, e)
+                shutil.copyfile(src, dst)
+        except Exception as e:
+            logger.warning("Could not write %s: %s", dst.name, e)
 
-    state.output_path = cleaned_path
-    state.audit_log_path = audit_path
+    state.output_path = str(deliverable_cleaned_path)
+    state.audit_log_path = str(deliverable_audit_path)
     state.audit_log = audit_entries
     state.stage = WorkflowStage.COMPLETE if passed else WorkflowStage.VALIDATING
-
-    logger.info(
-        "Agent 4 complete. Output: %s | Validation: %s",
-        cleaned_path, "PASSED" if passed else "FAILED",
-    )
     return state
+
+
+def run_transformation(state: SOVState) -> SOVState:
+    """
+    LangGraph node: Agent 4 — Controlled Transformation.
+    Reads: state (all previous stages)
+    Writes: state.output_path, state.audit_log_path, state.output_paths, state.audit_log_paths,
+            state.validation_passed, state.audit_log
+    """
+    logger.info("Agent 4: Controlled Transformation starting.")
+    state = state.model_copy(deep=True)
+    state.stage = WorkflowStage.TRANSFORMING
+
+    # Multi-sheet case: each PRIMARY sheet is transformed independently
+    if getattr(state, "sheet_states", None) and len(state.sheet_states) > 1:
+        logger.info("Agent 4: Transforming %d sheets independently.", len(state.sheet_states))
+        output_paths: Dict[str, str] = {}
+        audit_log_paths: Dict[str, str] = {}
+        all_audit_entries: List[AuditEntry] = []
+        all_passed = True
+        all_errors: List[str] = []
+
+        rec_status_by_id = {r.id: r.status for r in state.recommendations}
+
+        for sheet_name, sub_state in list(state.sheet_states.items()):
+            if rec_status_by_id:
+                sub_state.recommendations = [
+                    r.model_copy(update={"status": rec_status_by_id.get(r.id, r.status)})
+                    for r in sub_state.recommendations
+                ]
+            sub_state.unclaimed_decisions = state.unclaimed_decisions
+            sub_state.file_meta = state.file_meta
+            sub_state.sheet_manifest = state.sheet_manifest
+
+            clean_suffix = _clean_sheet_name(sheet_name)
+            transformed_sub = _execute_transformation_on_state(sub_state, sheet_suffix=clean_suffix)
+            state.sheet_states[sheet_name] = transformed_sub
+
+            if transformed_sub.output_path:
+                output_paths[sheet_name] = transformed_sub.output_path
+            if transformed_sub.audit_log_path:
+                audit_log_paths[sheet_name] = transformed_sub.audit_log_path
+            all_audit_entries.extend(transformed_sub.audit_log)
+            if not transformed_sub.validation_passed:
+                all_passed = False
+                all_errors.extend([f"[{sheet_name}] {e}" for e in transformed_sub.validation_errors])
+
+        primary_name = state.primary_sheet_name or next(iter(state.sheet_states))
+        primary_sub = state.sheet_states[primary_name]
+
+        # Explicit compatibility alias to the selected primary deliverable
+        output_dir = Path(config.OUTPUT_DIR)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        import shutil
+        if primary_sub.output_path and Path(primary_sub.output_path).exists():
+            try:
+                shutil.copyfile(primary_sub.output_path, output_dir / "Cleaned_SOV.xlsx")
+            except Exception as e:
+                logger.warning("Could not write Cleaned_SOV.xlsx alias: %s", e)
+        if primary_sub.audit_log_path and Path(primary_sub.audit_log_path).exists():
+            try:
+                shutil.copyfile(primary_sub.audit_log_path, output_dir / "Audit_Log.xlsx")
+            except Exception as e:
+                logger.warning("Could not write Audit_Log.xlsx alias: %s", e)
+
+        state.output_path = primary_sub.output_path
+        state.audit_log_path = primary_sub.audit_log_path
+        state.output_paths = output_paths
+        state.audit_log_paths = audit_log_paths
+        state.audit_log = all_audit_entries
+        state.validation_passed = all_passed
+        state.validation_errors = all_errors
+        state.stage = WorkflowStage.COMPLETE if all_passed else WorkflowStage.VALIDATING
+
+        logger.info(
+            "Agent 4 multi-sheet complete (%d sheets). Primary: %s | Validation: %s",
+            len(output_paths), state.output_path, "PASSED" if all_passed else "FAILED",
+        )
+        return state
+
+    # Single-sheet case
+    transformed = _execute_transformation_on_state(state, sheet_suffix=None)
+    if transformed.output_path:
+        transformed.output_paths = {transformed.primary_sheet_name or "Cleaned_SOV": transformed.output_path}
+    if transformed.audit_log_path:
+        transformed.audit_log_paths = {transformed.primary_sheet_name or "Cleaned_SOV": transformed.audit_log_path}
+    return transformed
 
 
 def generate_preview_df(
